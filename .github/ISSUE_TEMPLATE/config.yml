@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security reporting guidance
+    url: https://github.com/mikecobian09/miwhisper/blob/main/SECURITY.md
+    about: Read this before posting security-sensitive details in public.

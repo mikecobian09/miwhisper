@@ -1,5 +1,9 @@
 # MiWhisper
 
+[![Release](https://img.shields.io/github/v/release/mikecobian09/miwhisper?display_name=tag)](https://github.com/mikecobian09/miwhisper/releases)
+[![License](https://img.shields.io/github/license/mikecobian09/miwhisper)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-black)](#requirements)
+
 MiWhisper is a macOS menu bar app for fast local dictation with an optional voice-to-Codex bridge.
 
 Hold `Fn` to record, release to transcribe locally with `whisper.cpp`, and paste into the active app. Hold `Command + Fn` to transcribe your speech as a literal prompt and open a live Codex session window you can continue from the keyboard or by voice.
@@ -69,6 +73,14 @@ For most users, the easiest install path is to ask their coding agent to do it. 
 4. Grant permissions when macOS asks for them.
 
 5. Hold `Fn`, speak, release, and verify that the transcript pastes into the active app.
+
+## Project Docs
+
+- [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) for Codex, ChatGPT, Claude, or other agents installing the app.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, testing, and pull request expectations.
+- [SECURITY.md](./SECURITY.md) for responsible reporting guidance.
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for community expectations.
+- [CHANGELOG.md](./CHANGELOG.md) for public release history.
 
 ## Installation Notes
 
@@ -185,6 +197,7 @@ Useful starting points:
 - `small`: fastest reasonable default.
 - `large-v3-turbo-q5_0`: stronger quality candidate without the worst memory cost.
 - `medium`: available when you want to compare quality trade-offs.
+- `Translate to English` is supported, but in practice `small` and `medium` are the safest presets for that mode today. Treat `large-v3-turbo-q5_0` as best-effort until this app has more validation across machines.
 
 Helpful scripts:
 
@@ -242,15 +255,17 @@ That said, the core workflow already works well enough to justify open sourcing 
 
 ## Contributing
 
-Issues and pull requests are welcome, especially for:
+Issues and pull requests are welcome.
 
-- path and onboarding cleanup for non-author machines;
-- packaging and release automation;
-- better permission diagnostics;
+High-value contribution areas right now:
+
+- onboarding cleanup for non-author machines;
+- packaging, signing, and notarization;
+- better permission diagnostics and recovery paths;
 - safer optional Codex modes;
 - UI polish around session history, diffs, and activity blocks.
 
-Before making large changes, open an issue so the direction is clear first.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
