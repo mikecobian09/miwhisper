@@ -622,7 +622,7 @@ final class CodexSessionViewModel: ObservableObject {
             if running {
                 self.status = "Running Codex..."
             }
-            self.requestPersist(immediate: !running)
+            self.requestPersist(immediate: true)
         }
 
         runner.onThreadID = { [weak self] threadID in
