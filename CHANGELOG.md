@@ -2,6 +2,13 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.4
+
+- Added an opt-in `Launch at login` setting for the menu bar app workflow.
+- Added Login Items approval guidance directly in Settings for macOS setups that require manual approval.
+- Added a shortcut button to open the macOS Login Items settings screen when approval is needed.
+- Included the latest Codex bridge and menu bar fixes in a fresh public release build.
+
 ## v0.1.0-alpha.3
 
 - Made the menu bar contextual window much taller and wider so transcript and Codex history fit without feeling cramped.
