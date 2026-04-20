@@ -43,6 +43,20 @@ struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var codexSessionStore = CodexSessionStore.shared
 
+    private var contextualPanelMaxHeight: CGFloat {
+        let screen = NSApp.keyWindow?.screen ?? NSScreen.main
+        let visibleHeight = screen?.visibleFrame.height ?? 980
+        return max(860, visibleHeight - 40)
+    }
+
+    private var transcriptHistoryMaxHeight: CGFloat {
+        min(320, contextualPanelMaxHeight * 0.28)
+    }
+
+    private var codexSessionsMaxHeight: CGFloat {
+        min(420, contextualPanelMaxHeight * 0.38)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -213,7 +227,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 180)
+                .frame(maxHeight: transcriptHistoryMaxHeight)
             }
 
             Divider()
@@ -251,7 +265,7 @@ struct ContentView: View {
             .padding(16)
         }
         .frame(width: 360)
-        .frame(maxHeight: 860)
+        .frame(maxHeight: contextualPanelMaxHeight)
         .onAppear {
             appState.reloadTranscriptHistory()
             codexSessionStore.reload()
@@ -292,8 +306,13 @@ struct ContentView: View {
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
                                         if session.isBusy ?? false {
-                                            ProgressView()
-                                                .controlSize(.small)
+                                            HStack(spacing: 4) {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                                Text("Running")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.orange)
+                                            }
                                         }
                                     }
                                     Text(codexSessionSubtitle(for: session))
@@ -307,7 +326,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 220)
+                .frame(maxHeight: codexSessionsMaxHeight)
             }
         }
     }

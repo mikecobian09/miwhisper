@@ -171,6 +171,7 @@ final class CodexSessionStore: ObservableObject {
     }
 
     private func load() {
+        let currentBusyState = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.isBusy ?? false) })
         guard let data = defaults.data(forKey: Self.defaultsKey) else {
             sessions = []
             return
@@ -183,7 +184,7 @@ final class CodexSessionStore: ObservableObject {
         let normalizedSessions = decodedRecords
             .map { record in
                 var normalized = record
-                normalized.isBusy = false
+                normalized.isBusy = currentBusyState[normalized.id] ?? false
                 normalized.activity = sanitizedActivity(record.activity)
                 if normalized.latestResponse.count > maxLatestResponseCharacters {
                     normalized.latestResponse = CodexActivityEntry.clippedText(
