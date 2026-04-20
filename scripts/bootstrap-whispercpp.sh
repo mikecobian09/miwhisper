@@ -37,7 +37,18 @@ EOF
   fi
 fi
 
-if [[ ! -d "$VENDOR_DIR/.git" ]]; then
+if [[ ! -f "$VENDOR_DIR/CMakeLists.txt" ]]; then
+  if [[ -e "$VENDOR_DIR" && ! -d "$VENDOR_DIR" ]]; then
+    echo "Vendor path exists but is not a directory: $VENDOR_DIR" >&2
+    exit 1
+  fi
+
+  if [[ -d "$VENDOR_DIR" ]] && [[ -n "$(find "$VENDOR_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    echo "Vendor path exists but does not look like whisper.cpp: $VENDOR_DIR" >&2
+    exit 1
+  fi
+
+  rm -rf "$VENDOR_DIR"
   git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git "$VENDOR_DIR"
 fi
 
