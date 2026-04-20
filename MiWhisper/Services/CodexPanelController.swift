@@ -846,6 +846,10 @@ private struct CodexActivityBlock: Identifiable {
         return ordered
     }
 
+    var referencedFilePaths: [String] {
+        ActivityFileReferenceParser.paths(in: entries.compactMap(\.detail).joined(separator: "\n\n"))
+    }
+
     var summary: String? {
         switch kind {
         case .command:
@@ -1089,8 +1093,20 @@ private struct CodexSessionView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                RenderedResponseContainer(document: ReaderDocument(kind: .response(model.latestResponse)))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    let referencedFiles = ActivityFileReferenceParser.paths(in: model.latestResponse)
+
+                    if !referencedFiles.isEmpty {
+                        ResponseFileActionsView(paths: referencedFiles)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                        Divider()
+                            .padding(.top, 10)
+                    }
+
+                    RenderedResponseContainer(document: ReaderDocument(kind: .response(model.latestResponse)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
     }
@@ -1291,6 +1307,10 @@ private struct CodexActivityBlockView: View {
                 )
             }
 
+            if !block.referencedFilePaths.isEmpty {
+                ResponseFileActionsView(paths: block.referencedFilePaths)
+            }
+
             if !block.relatedFiles.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(block.relatedFiles.count == 1 ? "File" : "Files")
@@ -1356,6 +1376,90 @@ private struct CodexActivityBlockView: View {
             return block.kind == .final ? .body : .caption
         case .monospaced:
             return .caption.monospaced()
+        }
+    }
+}
+
+@MainActor
+private struct ResponseFileActionsView: View {
+    let paths: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(paths.count == 1 ? "Detected file" : "Detected files")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            ForEach(paths, id: \.self) { path in
+                ResponseFileActionRow(path: path)
+            }
+        }
+    }
+}
+
+@MainActor
+private struct ResponseFileActionRow: View {
+    let path: String
+
+    private var isRenderableDocument: Bool {
+        ReaderRenderableFileType(path: path) != nil
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                FileLinkOpener.openPath(path, line: nil)
+            } label: {
+                Text(URL(fileURLWithPath: path).lastPathComponent)
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.link)
+
+            Spacer(minLength: 0)
+
+            if isRenderableDocument {
+                Button("Open Rendered") {
+                    CodexReaderWindowManager.shared.openFileReader(path: path)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            Button(isRenderableDocument ? "Open Raw" : "Open") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Button("Finder") {
+                FileLinkOpener.revealInFinder(path)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .contextMenu {
+            if isRenderableDocument {
+                Button("Open Rendered") {
+                    CodexReaderWindowManager.shared.openFileReader(path: path)
+                }
+
+                Button("Open Raw") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                }
+            } else {
+                Button("Open") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                }
+            }
+
+            Button("Reveal in Finder") {
+                FileLinkOpener.revealInFinder(path)
+            }
+
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(path, forType: .string)
+            }
         }
     }
 }
@@ -1836,6 +1940,50 @@ private enum FileLinkifier {
             let customURL = FileLinkOpener.makeCustomURL(fromToken: token)
             attributedString.addAttribute(.link, value: customURL, range: match.range)
         }
+    }
+}
+
+private enum ActivityFileReferenceParser {
+    private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[[^\]]+\]\((<)?(/[^)\s>]+(?:\:\d+)?)(>)?\)"#)
+    private static let barePathRegex = try! NSRegularExpression(pattern: #"/Users/[^\s\])>]+(?:\:\d+)?"#)
+
+    static func paths(in text: String) -> [String] {
+        let source = text as NSString
+        let fullRange = NSRange(location: 0, length: source.length)
+        var ordered: [String] = []
+        var seen: Set<String> = []
+
+        markdownLinkRegex.enumerateMatches(in: text, range: fullRange) { match, _, _ in
+            guard let match, match.numberOfRanges >= 3 else { return }
+            let token = source.substring(with: match.range(at: 2))
+            let path = normalizedPath(from: token)
+            guard FileManager.default.fileExists(atPath: path), !seen.contains(path) else { return }
+            ordered.append(path)
+            seen.insert(path)
+        }
+
+        barePathRegex.enumerateMatches(in: text, range: fullRange) { match, _, _ in
+            guard let match else { return }
+            let token = source.substring(with: match.range)
+            let path = normalizedPath(from: token)
+            guard FileManager.default.fileExists(atPath: path), !seen.contains(path) else { return }
+            ordered.append(path)
+            seen.insert(path)
+        }
+
+        return ordered
+    }
+
+    private static func normalizedPath(from token: String) -> String {
+        let trimmed = token
+            .trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let range = trimmed.range(of: #":\d+$"#, options: .regularExpression) {
+            return String(trimmed[..<range.lowerBound])
+        }
+
+        return trimmed
     }
 }
 
