@@ -2,6 +2,15 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.3
+
+- Made the menu bar contextual window much taller and wider so transcript and Codex history fit without feeling cramped.
+- Fixed Codex session running indicators so active sessions reliably show as running in the menu bar history.
+- Improved Codex session windows with a more reliable live composer, better `Latest Response` backfill, and stronger session-state persistence.
+- Improved generated file handling so Codex responses expose direct actions for rendered open, raw open, Finder reveal, and path copy.
+- Improved in-app document rendering for generated `.html`, `.htm`, `.md`, and `.markdown` files, especially for file-backed interactive HTML.
+- Updated public docs to reflect release installs, current reader behavior, and the unsigned/not-notarized release state.
+
 ## v0.1.0-alpha.2
 
 - Added `INSTALL_FOR_AGENTS.md` so coding agents can install and validate MiWhisper end-to-end.

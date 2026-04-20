@@ -37,6 +37,11 @@ Use this when the user wants the quickest install and a release zip exists.
 5. Ask the user to grant the required macOS permissions when prompted.
 6. Verify that `Fn` dictation works.
 
+Important:
+
+- Current public releases are unsigned and not notarized.
+- Do not describe the release install as trusted by macOS; Gatekeeper may require an extra confirmation step.
+
 Suggested shell flow:
 
 ```bash
@@ -222,6 +227,7 @@ Manual validation:
 - Run `./scripts/smoke-test-whisper.sh`
 - Confirm `models/ggml-small.bin` exists
 - Confirm `vendors/whisper.cpp/build/bin/whisper-cli` exists
+- Confirm the user granted Microphone access
 
 ### Paste fails
 
@@ -233,6 +239,12 @@ Manual validation:
 - Verify Codex is installed
 - Verify the Codex executable path in Settings
 - Confirm Codex works outside MiWhisper before blaming the app
+
+### Codex session opens but the UI feels broken
+
+- Rebuild the app after local source changes and relaunch it.
+- Confirm the session composer accepts keyboard input and that `Latest Response` is populated after a completed turn.
+- For generated `.html` and `.md` files, use the session file actions instead of copying raw content into another app first.
 
 ## What Not To Do
 
@@ -254,4 +266,3 @@ If a user asks an agent to install MiWhisper, a good concise response is:
 2. I will bootstrap `whisper.cpp`, build MiWhisper, and launch it.
 3. You will still need to approve Microphone, Accessibility, and Input Monitoring in macOS.
 4. After that I will validate `Fn` dictation and, if you want, `Command + Fn` Codex mode.
-

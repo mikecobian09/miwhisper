@@ -8,7 +8,7 @@ MiWhisper is a macOS menu bar app for fast local dictation with an optional voic
 
 Hold `Fn` to record, release to transcribe locally with `whisper.cpp`, and paste into the active app. Hold `Command + Fn` to transcribe your speech as a literal prompt and open a live Codex session window you can continue from the keyboard or by voice.
 
-> Status: early alpha, but already useful. The dictation path is local-first. The Codex path is intentionally optimized for a trusted personal development machine, not for a sandboxed multi-user environment.
+> Status: early alpha, but already useful. The dictation path is local-first. The Codex path is intentionally optimized for a trusted development machine, not for a sandboxed multi-user environment.
 
 ## Why this exists
 
@@ -58,7 +58,22 @@ Optional for Codex mode:
 
 ## Quick Start
 
-For most users, the easiest install path is to ask their coding agent to do it. Point the agent at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) and let it run the setup and validation flow, then approve the required macOS permissions when prompted.
+If you just want to try MiWhisper, install the latest release zip.
+
+If you want the smoothest setup, ask your coding agent to do it and point it at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md).
+
+### Install From a Release
+
+1. Download the latest macOS arm64 zip from [Releases](https://github.com/mikecobian09/miwhisper/releases).
+2. Unzip `MiWhisper.app`.
+3. Move it to `/Applications`.
+4. Launch it and approve the required macOS permissions.
+
+Current releases are unsigned and not notarized yet, so macOS Gatekeeper may require an extra confirmation step.
+
+### Build From Source
+
+For most users, the easiest source install path is still to ask their coding agent to do it. Point the agent at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) and let it run the setup and validation flow, then approve the required macOS permissions when prompted.
 
 1. Build the bundled `whisper.cpp` dependencies and download the default model:
 
@@ -228,7 +243,14 @@ Helpful scripts:
 
 ### Generated HTML opens blank
 
-- If the file depends on relative assets, use the in-app reader first. MiWhisper loads HTML files with their parent folder as `baseURL`.
+- Open the actual generated file from the session file actions instead of pasting raw HTML into the reader.
+- File-backed HTML now loads with local read access and JavaScript enabled in the in-app reader.
+- Very heavy or browser-specific pages may still look better in Safari or Chrome than in the embedded reader.
+
+### Rendered Markdown looks wrong
+
+- Open the generated `.md` file directly from the session file actions.
+- If the content is very HTML-heavy, MiWhisper may render it better as HTML than as Markdown.
 
 ## Architecture
 
@@ -246,10 +268,10 @@ MiWhisper is useful, but still opinionated and rough in places.
 
 Known realities:
 
-- It is currently optimized for the author’s Apple Silicon development setup.
+- It is currently optimized for Apple Silicon development setups.
 - Some defaults are still more developer-oriented than end-user-oriented.
 - Codex mode is intentionally unsandboxed.
-- The app is not yet packaged as a polished drag-and-drop release.
+- Downloadable release zips exist, but they are not yet signed or notarized.
 
 That said, the core workflow already works well enough to justify open sourcing it.
 
