@@ -2,6 +2,14 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.5
+
+- Added a new `Stats` section to the menu bar contextual panel.
+- Added daily persisted usage buckets so analytics do not depend on keeping a long transcript history.
+- Added period-based usage summaries for day, week, month, year, and all time.
+- Added a compact 14-day chart for estimated saved minutes plus usage, word, and audio-time metrics.
+- Added a heuristic typing-time-saved estimate based on transcript word counts versus recorded audio time.
+
 ## v0.1.0-alpha.4
 
 - Added an opt-in `Launch at login` setting for the menu bar app workflow.
