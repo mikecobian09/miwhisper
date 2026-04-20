@@ -535,6 +535,9 @@ final class CodexSessionViewModel: ObservableObject {
             workingDirectory: record.workingDirectory,
             initialThreadID: record.threadID
         )
+        if latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            latestResponse = Self.derivedLatestResponse(from: activity)
+        }
         bindRunner()
     }
 
@@ -608,6 +611,7 @@ final class CodexSessionViewModel: ObservableObject {
             } else {
                 self.activity.append(entry)
             }
+            self.refreshLatestResponseIfNeeded(from: entry)
             self.trimActivity()
             self.requestPersist()
         }
@@ -717,6 +721,15 @@ final class CodexSessionViewModel: ObservableObject {
         }
     }
 
+    private func refreshLatestResponseIfNeeded(from entry: CodexActivityEntry) {
+        guard entry.blockKind == .final else { return }
+
+        let trimmedDetail = entry.detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedDetail.isEmpty else { return }
+
+        latestResponse = trimmedDetail
+    }
+
     private func requestPersist(immediate: Bool = false) {
         persistTask?.cancel()
 
@@ -745,6 +758,17 @@ final class CodexSessionViewModel: ObservableObject {
             record.serviceTier = serviceTier
             record.isBusy = isBusy
         }
+    }
+
+    private static func derivedLatestResponse(from activity: [CodexActivityEntry]) -> String {
+        activity
+            .reversed()
+            .first {
+                $0.blockKind == .final &&
+                !($0.detail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            }?
+            .detail?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 
