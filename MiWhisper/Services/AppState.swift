@@ -11,6 +11,119 @@ struct TranscriptEntry: Codable, Identifiable {
     let createdAt: Date
 }
 
+struct UsageDayBucket: Codable, Identifiable {
+    let dayStart: Date
+    var dictationCount: Int
+    var codexPromptCount: Int
+    var literalCount: Int
+    var translationCount: Int
+    var wordCount: Int
+    var characterCount: Int
+    var audioSeconds: Double
+    var estimatedTypingSeconds: Double
+
+    var id: Date { dayStart }
+
+    var totalUses: Int {
+        dictationCount + codexPromptCount
+    }
+
+    var estimatedSavedSeconds: Double {
+        max(estimatedTypingSeconds - audioSeconds, 0)
+    }
+
+    mutating func record(
+        intent: HotkeyIntent,
+        mode: TranscriptionMode,
+        wordCount: Int,
+        characterCount: Int,
+        audioSeconds: Double,
+        estimatedTypingSeconds: Double
+    ) {
+        switch intent {
+        case .dictation:
+            dictationCount += 1
+        case .codexPrompt:
+            codexPromptCount += 1
+        }
+
+        switch mode {
+        case .literal:
+            literalCount += 1
+        case .translateToEnglish:
+            translationCount += 1
+        }
+
+        self.wordCount += wordCount
+        self.characterCount += characterCount
+        self.audioSeconds += audioSeconds
+        self.estimatedTypingSeconds += estimatedTypingSeconds
+    }
+}
+
+enum UsageStatsPeriod: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+    case year
+    case allTime
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day:
+            return "Day"
+        case .week:
+            return "Week"
+        case .month:
+            return "Month"
+        case .year:
+            return "Year"
+        case .allTime:
+            return "All"
+        }
+    }
+}
+
+struct UsageStatsSnapshot {
+    let dictationCount: Int
+    let codexPromptCount: Int
+    let literalCount: Int
+    let translationCount: Int
+    let wordCount: Int
+    let characterCount: Int
+    let audioSeconds: Double
+    let estimatedTypingSeconds: Double
+
+    static let empty = UsageStatsSnapshot(
+        dictationCount: 0,
+        codexPromptCount: 0,
+        literalCount: 0,
+        translationCount: 0,
+        wordCount: 0,
+        characterCount: 0,
+        audioSeconds: 0,
+        estimatedTypingSeconds: 0
+    )
+
+    var totalUses: Int {
+        dictationCount + codexPromptCount
+    }
+
+    var estimatedSavedSeconds: Double {
+        max(estimatedTypingSeconds - audioSeconds, 0)
+    }
+}
+
+struct UsageChartPoint: Identifiable {
+    let dayStart: Date
+    let uses: Int
+    let savedMinutes: Double
+
+    var id: Date { dayStart }
+}
+
 enum TranscriptionMode: String, CaseIterable, Identifiable {
     case literal
     case translateToEnglish
@@ -598,11 +711,14 @@ final class AppState: ObservableObject {
     static let shared = AppState()
     private static let transcriptHistoryKey = "transcriptHistory"
     private static let maxTranscriptHistory = 10
+    private static let usageDailyBucketsKey = "usageDailyBuckets"
+    private static let maxUsageDailyBuckets = 730
     private static let transcriptionModeKey = "transcriptionMode"
     private static let codexDefaultModelKey = "codexDefaultModel"
     private static let codexReasoningEffortKey = "codexDefaultReasoningEffort"
     private static let codexServiceTierKey = "codexServiceTier"
     private static let launchAtLoginPreferenceKey = "launchAtLoginPreference"
+    private static let estimatedTypingWordsPerMinute = 38.0
     private struct LastInsertionState {
         let processIdentifier: pid_t
         let trailingCharacter: Character?
@@ -615,6 +731,7 @@ final class AppState: ObservableObject {
     @Published var statusMessage = "Ready"
     @Published var lastTranscript = ""
     @Published var transcriptHistory: [TranscriptEntry] = []
+    @Published var usageDailyBuckets: [UsageDayBucket] = []
     @Published var errorMessage: String?
     @Published var hasMicrophoneAccess = false
     @Published var hasAccessibilityAccess = false
@@ -822,6 +939,7 @@ final class AppState: ObservableObject {
 
     private init() {
         loadTranscriptHistory()
+        loadUsageDailyBuckets()
         hasHotkeyMonitor = HotkeyMonitor.shared.isAvailable
         syncLaunchAtLoginState()
 
@@ -1199,6 +1317,7 @@ final class AppState: ObservableObject {
         }
 
         let heldDurationMs = recordingStartedAt.map { Date().timeIntervalSince($0) * 1000 } ?? -1
+        let audioDurationSeconds = max(recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0, 0)
         NSLog(
             "[MiWhisper][AppState] endPushToTalk path=%@ heldDurationMs=%.1f",
             recordingURL.path,
@@ -1228,11 +1347,23 @@ final class AppState: ObservableObject {
                     let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                     lastTranscript = prompt
                     rememberTranscript(prompt)
+                    recordUsage(
+                        transcript: prompt,
+                        intent: intent,
+                        mode: transcriptionMode,
+                        audioDurationSeconds: audioDurationSeconds
+                    )
                     runCodex(for: prompt)
                 } else {
                     let formattedTranscript = await preparedTranscriptForInsertion(transcript)
                     lastTranscript = formattedTranscript
                     rememberTranscript(formattedTranscript)
+                    recordUsage(
+                        transcript: formattedTranscript,
+                        intent: intent,
+                        mode: transcriptionMode,
+                        audioDurationSeconds: audioDurationSeconds
+                    )
                     await pasteTranscript(formattedTranscript)
                 }
             } catch {
@@ -1503,13 +1634,145 @@ final class AppState: ObservableObject {
         transcriptHistory = decoded
     }
 
+    private func loadUsageDailyBuckets() {
+        guard let data = defaults.data(forKey: Self.usageDailyBucketsKey) else { return }
+        guard let decoded = try? JSONDecoder().decode([UsageDayBucket].self, from: data) else { return }
+        usageDailyBuckets = decoded.sorted { $0.dayStart > $1.dayStart }
+    }
+
     func reloadTranscriptHistory() {
         loadTranscriptHistory()
+    }
+
+    func reloadUsageDailyBuckets() {
+        loadUsageDailyBuckets()
     }
 
     private func saveTranscriptHistory() {
         guard let data = try? JSONEncoder().encode(transcriptHistory) else { return }
         defaults.set(data, forKey: Self.transcriptHistoryKey)
+    }
+
+    private func saveUsageDailyBuckets() {
+        guard let data = try? JSONEncoder().encode(usageDailyBuckets) else { return }
+        defaults.set(data, forKey: Self.usageDailyBucketsKey)
+    }
+
+    var hasUsageStats: Bool {
+        usageDailyBuckets.contains { $0.totalUses > 0 }
+    }
+
+    func usageSnapshot(for period: UsageStatsPeriod) -> UsageStatsSnapshot {
+        let buckets = usageBuckets(for: period)
+        guard !buckets.isEmpty else { return .empty }
+
+        return UsageStatsSnapshot(
+            dictationCount: buckets.reduce(0) { $0 + $1.dictationCount },
+            codexPromptCount: buckets.reduce(0) { $0 + $1.codexPromptCount },
+            literalCount: buckets.reduce(0) { $0 + $1.literalCount },
+            translationCount: buckets.reduce(0) { $0 + $1.translationCount },
+            wordCount: buckets.reduce(0) { $0 + $1.wordCount },
+            characterCount: buckets.reduce(0) { $0 + $1.characterCount },
+            audioSeconds: buckets.reduce(0) { $0 + $1.audioSeconds },
+            estimatedTypingSeconds: buckets.reduce(0) { $0 + $1.estimatedTypingSeconds }
+        )
+    }
+
+    func usageChartPoints(lastDays: Int = 14) -> [UsageChartPoint] {
+        guard lastDays > 0 else { return [] }
+
+        let calendar = Calendar.autoupdatingCurrent
+        let today = calendar.startOfDay(for: Date())
+        let lookup = Dictionary(uniqueKeysWithValues: usageDailyBuckets.map { (calendar.startOfDay(for: $0.dayStart), $0) })
+
+        return (0..<lastDays).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: -(lastDays - offset - 1), to: today) else {
+                return nil
+            }
+
+            let bucket = lookup[day]
+            return UsageChartPoint(
+                dayStart: day,
+                uses: bucket?.totalUses ?? 0,
+                savedMinutes: max((bucket?.estimatedSavedSeconds ?? 0) / 60.0, 0)
+            )
+        }
+    }
+
+    private func usageBuckets(for period: UsageStatsPeriod) -> [UsageDayBucket] {
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+
+        switch period {
+        case .allTime:
+            return usageDailyBuckets
+        case .day:
+            let start = calendar.startOfDay(for: now)
+            return usageDailyBuckets.filter { $0.dayStart >= start }
+        case .week:
+            guard let interval = calendar.dateInterval(of: .weekOfYear, for: now) else { return [] }
+            return usageDailyBuckets.filter { $0.dayStart >= interval.start }
+        case .month:
+            guard let interval = calendar.dateInterval(of: .month, for: now) else { return [] }
+            return usageDailyBuckets.filter { $0.dayStart >= interval.start }
+        case .year:
+            guard let interval = calendar.dateInterval(of: .year, for: now) else { return [] }
+            return usageDailyBuckets.filter { $0.dayStart >= interval.start }
+        }
+    }
+
+    private func recordUsage(
+        transcript: String,
+        intent: HotkeyIntent,
+        mode: TranscriptionMode,
+        audioDurationSeconds: Double
+    ) {
+        let normalized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+
+        let words = normalized.split(whereSeparator: \.isWhitespace).count
+        let characters = normalized.count
+        let typingSeconds = words > 0 ? (Double(words) / Self.estimatedTypingWordsPerMinute) * 60.0 : 0
+        let calendar = Calendar.autoupdatingCurrent
+        let dayStart = calendar.startOfDay(for: Date())
+
+        if let index = usageDailyBuckets.firstIndex(where: { calendar.isDate($0.dayStart, inSameDayAs: dayStart) }) {
+            usageDailyBuckets[index].record(
+                intent: intent,
+                mode: mode,
+                wordCount: words,
+                characterCount: characters,
+                audioSeconds: audioDurationSeconds,
+                estimatedTypingSeconds: typingSeconds
+            )
+        } else {
+            var bucket = UsageDayBucket(
+                dayStart: dayStart,
+                dictationCount: 0,
+                codexPromptCount: 0,
+                literalCount: 0,
+                translationCount: 0,
+                wordCount: 0,
+                characterCount: 0,
+                audioSeconds: 0,
+                estimatedTypingSeconds: 0
+            )
+            bucket.record(
+                intent: intent,
+                mode: mode,
+                wordCount: words,
+                characterCount: characters,
+                audioSeconds: audioDurationSeconds,
+                estimatedTypingSeconds: typingSeconds
+            )
+            usageDailyBuckets.insert(bucket, at: 0)
+        }
+
+        usageDailyBuckets.sort { $0.dayStart > $1.dayStart }
+        if usageDailyBuckets.count > Self.maxUsageDailyBuckets {
+            usageDailyBuckets = Array(usageDailyBuckets.prefix(Self.maxUsageDailyBuckets))
+        }
+        saveUsageDailyBuckets()
     }
 
     private func handleModelDownloadProgress(

@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 private struct TranscriptionModeToggle: View {
@@ -42,6 +43,7 @@ private struct TranscriptionModeToggle: View {
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var codexSessionStore = CodexSessionStore.shared
+    @State private var selectedStatsPeriod: UsageStatsPeriod = .week
 
     private var contextualPanelMaxHeight: CGFloat {
         let screen = NSApp.keyWindow?.screen ?? NSScreen.main
@@ -55,6 +57,13 @@ struct ContentView: View {
 
     private var codexSessionsMaxHeight: CGFloat {
         min(560, contextualPanelMaxHeight * 0.48)
+    }
+
+    private var statsGridColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 120), spacing: 8),
+            GridItem(.flexible(minimum: 120), spacing: 8)
+        ]
     }
 
     var body: some View {
@@ -232,6 +241,10 @@ struct ContentView: View {
 
             Divider()
 
+            statsSection
+
+            Divider()
+
             codexSection
 
             Divider()
@@ -267,12 +280,81 @@ struct ContentView: View {
         .frame(width: 580, height: contextualPanelMaxHeight, alignment: .topLeading)
         .onAppear {
             appState.reloadTranscriptHistory()
+            appState.reloadUsageDailyBuckets()
             codexSessionStore.reload()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             appState.reloadTranscriptHistory()
+            appState.reloadUsageDailyBuckets()
             codexSessionStore.reload()
         }
+    }
+
+    private var statsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Stats")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if appState.hasUsageStats {
+                Picker("Stats Period", selection: $selectedStatsPeriod) {
+                    ForEach(UsageStatsPeriod.allCases) { period in
+                        Text(period.title).tag(period)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                statsChart
+
+                let snapshot = appState.usageSnapshot(for: selectedStatsPeriod)
+                LazyVGrid(columns: statsGridColumns, spacing: 8) {
+                    statsCard(title: "Uses", value: "\(snapshot.totalUses)", subtitle: "\(selectedStatsPeriod.title) total")
+                    statsCard(title: "Words", value: formattedCount(snapshot.wordCount), subtitle: "Spoken output")
+                    statsCard(title: "Dictation", value: "\(snapshot.dictationCount)", subtitle: "Normal insertions")
+                    statsCard(title: "Codex", value: "\(snapshot.codexPromptCount)", subtitle: "Voice prompts")
+                    statsCard(title: "Spoken Time", value: formatDuration(snapshot.audioSeconds), subtitle: "Recorded audio")
+                    statsCard(title: "Saved", value: formatDuration(snapshot.estimatedSavedSeconds), subtitle: "Typing time avoided")
+                }
+
+                Text("Saved time is a heuristic: estimated typing time for the words minus actual recorded audio time.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No usage stats yet. Dictate a few times and MiWhisper will start building daily metrics.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var statsChart: some View {
+        let points = appState.usageChartPoints(lastDays: 14)
+
+        return Chart(points) { point in
+            BarMark(
+                x: .value("Day", point.dayStart, unit: .day),
+                y: .value("Saved Minutes", point.savedMinutes)
+            )
+            .foregroundStyle(Color.accentColor.gradient)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .day, count: 2)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.quaternary)
+                AxisValueLabel(format: .dateTime.weekday(.narrow))
+                    .font(.caption2)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(.quaternary)
+                AxisValueLabel()
+                    .font(.caption2)
+            }
+        }
+        .frame(height: 132)
     }
 
     private var codexSection: some View {
@@ -408,5 +490,41 @@ struct ContentView: View {
 
         let compact = responsePreview.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         return "\(statusPrefix) · Session \(thread) · \(compact.prefix(70))"
+    }
+
+    private func statsCard(title: String, value: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold))
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    private func formattedCount(_ value: Int) -> String {
+        value.formatted(.number.notation(.compactName))
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let rounded = max(seconds, 0)
+        if rounded < 60 {
+            return "\(Int(rounded.rounded()))s"
+        }
+
+        if rounded < 3600 {
+            return "\(Int((rounded / 60).rounded()))m"
+        }
+
+        return String(format: "%.1fh", rounded / 3600.0)
     }
 }
