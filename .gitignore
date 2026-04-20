@@ -1,0 +1,19 @@
+AGENTS.md
+.DS_Store
+build/
+.playwright-cli/
+MiWhisper.xcodeproj/xcuserdata/
+MiWhisper.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+models/*.bin
+
+# Common local secrets and machine-specific files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.cer
+*.mobileprovision
+.netrc
+.npmrc

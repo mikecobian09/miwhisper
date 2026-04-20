@@ -1,0 +1,1991 @@
+import AppKit
+import Combine
+import SwiftUI
+import WebKit
+
+@MainActor
+final class InAppTextInsertionManager {
+    struct InsertionContext {
+        let precedingCharacter: Character?
+        let hasSelection: Bool
+    }
+
+    static let shared = InAppTextInsertionManager()
+
+    private weak var activeTextView: NSTextView?
+
+    var hasActiveTarget: Bool {
+        resolvedTextView() != nil
+    }
+
+    func register(_ textView: NSTextView) {
+        activeTextView = textView
+    }
+
+    func unregister(_ textView: NSTextView) {
+        guard activeTextView === textView else { return }
+        activeTextView = nil
+    }
+
+    func insertionContext() -> InsertionContext? {
+        guard let textView = resolvedTextView() else { return nil }
+
+        let stringValue = textView.string as NSString
+        let selection = textView.selectedRange()
+        let precedingCharacter: Character?
+
+        if selection.location > 0, selection.location <= stringValue.length {
+            precedingCharacter = stringValue.substring(with: NSRange(location: selection.location - 1, length: 1)).first
+        } else {
+            precedingCharacter = nil
+        }
+
+        return InsertionContext(
+            precedingCharacter: precedingCharacter,
+            hasSelection: selection.length > 0
+        )
+    }
+
+    @discardableResult
+    func insert(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        guard let textView = resolvedTextView(), textView.isEditable else { return false }
+
+        let selectedRange = textView.selectedRange()
+        guard textView.shouldChangeText(in: selectedRange, replacementString: text) else {
+            return false
+        }
+
+        textView.textStorage?.replaceCharacters(in: selectedRange, with: text)
+        let insertionLocation = selectedRange.location + (text as NSString).length
+        textView.setSelectedRange(NSRange(location: insertionLocation, length: 0))
+        textView.didChangeText()
+        textView.scrollRangeToVisible(NSRange(location: insertionLocation, length: 0))
+        return true
+    }
+
+    private func resolvedTextView() -> NSTextView? {
+        guard let textView = activeTextView else { return nil }
+        guard textView.window?.isKeyWindow == true else { return nil }
+        return textView
+    }
+}
+
+@MainActor
+struct CodexSessionRecord: Codable, Identifiable {
+    let id: UUID
+    var title: String
+    var threadID: String?
+    var executablePath: String
+    var workingDirectory: String
+    var modelOverride: String?
+    var reasoningEffort: CodexReasoningEffort?
+    var serviceTier: CodexServiceTier?
+    var isBusy: Bool?
+    var latestResponse: String
+    var activity: [CodexActivityEntry]
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+@MainActor
+final class CodexSessionStore: ObservableObject {
+    static let shared = CodexSessionStore()
+
+    @Published private(set) var sessions: [CodexSessionRecord] = []
+
+    private static let defaultsKey = "codexSessionHistory"
+    private static let maxSessions = 30
+    private static let maxActivitiesPerSession = 200
+
+    private let defaults = UserDefaults.standard
+    private let maxLatestResponseCharacters = 48_000
+
+    private init() {
+        load()
+    }
+
+    func createSession(
+        title: String,
+        executablePath: String,
+        workingDirectory: String,
+        modelOverride: String?,
+        reasoningEffort: CodexReasoningEffort,
+        serviceTier: CodexServiceTier
+    ) -> CodexSessionRecord {
+        let record = CodexSessionRecord(
+            id: UUID(),
+            title: title,
+            threadID: nil,
+            executablePath: executablePath,
+            workingDirectory: workingDirectory,
+            modelOverride: modelOverride,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            isBusy: false,
+            latestResponse: "",
+            activity: [],
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        upsert(record)
+        return record
+    }
+
+    func session(id: UUID) -> CodexSessionRecord? {
+        sessions.first { $0.id == id }
+    }
+
+    func updateSession(id: UUID, mutate: (inout CodexSessionRecord) -> Void) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        var record = sessions[index]
+        mutate(&record)
+        record.activity = sanitizedActivity(record.activity)
+        if record.latestResponse.count > maxLatestResponseCharacters {
+            record.latestResponse = CodexActivityEntry.clippedText(
+                record.latestResponse,
+                maxCharacters: maxLatestResponseCharacters
+            )
+        }
+        record.updatedAt = Date()
+        sessions[index] = record
+        sortAndTrim()
+        save()
+    }
+
+    private func upsert(_ record: CodexSessionRecord) {
+        if let index = sessions.firstIndex(where: { $0.id == record.id }) {
+            sessions[index] = record
+        } else {
+            sessions.insert(record, at: 0)
+        }
+        sortAndTrim()
+        save()
+    }
+
+    private func sortAndTrim() {
+        sessions.sort { $0.updatedAt > $1.updatedAt }
+        if sessions.count > Self.maxSessions {
+            sessions = Array(sessions.prefix(Self.maxSessions))
+        }
+    }
+
+    private func load() {
+        guard let data = defaults.data(forKey: Self.defaultsKey) else {
+            sessions = []
+            return
+        }
+        let decodedRecords = decodeSessionRecords(from: data)
+        guard !decodedRecords.isEmpty else {
+            sessions = []
+            return
+        }
+        let normalizedSessions = decodedRecords
+            .map { record in
+                var normalized = record
+                normalized.isBusy = false
+                normalized.activity = sanitizedActivity(record.activity)
+                if normalized.latestResponse.count > maxLatestResponseCharacters {
+                    normalized.latestResponse = CodexActivityEntry.clippedText(
+                        normalized.latestResponse,
+                        maxCharacters: maxLatestResponseCharacters
+                    )
+                }
+                return normalized
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+
+        sessions = normalizedSessions
+
+        if let normalizedData = try? JSONEncoder().encode(normalizedSessions), normalizedData != data {
+            defaults.set(normalizedData, forKey: Self.defaultsKey)
+        }
+    }
+
+    func reload() {
+        load()
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(sessions) else { return }
+        defaults.set(data, forKey: Self.defaultsKey)
+    }
+
+    private func decodeSessionRecords(from data: Data) -> [CodexSessionRecord] {
+        if let direct = try? JSONDecoder().decode([CodexSessionRecord].self, from: data) {
+            return direct
+        }
+
+        if let lossy = try? JSONDecoder().decode([LossyDecodable<CodexSessionRecord>].self, from: data) {
+            let recovered = lossy.compactMap(\.value)
+            NSLog("[MiWhisper][CodexSessionStore] recovered %ld session(s) via lossy decode", recovered.count)
+            return recovered
+        }
+
+        NSLog("[MiWhisper][CodexSessionStore] failed to decode saved Codex session history")
+        return []
+    }
+
+    private func sanitizedActivity(_ activity: [CodexActivityEntry]) -> [CodexActivityEntry] {
+        Array(activity.suffix(Self.maxActivitiesPerSession)).map { $0.sanitizedForStorage() }
+    }
+}
+
+private struct LossyDecodable<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        value = try? container.decode(Value.self)
+    }
+}
+
+private enum CodexSessionTitleBuilder {
+    static func make(for prompt: String) -> String {
+        let collapsed = prompt.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return "Codex • " + String(collapsed.prefix(40))
+    }
+}
+
+@MainActor
+private enum CodexModelCatalog {
+    static func options(currentModel: String) -> [CodexModelOption] {
+        var options = AppState.shared.codexModelOptions
+        let normalized = currentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !normalized.isEmpty, !options.contains(where: { $0.id == normalized }) {
+            options.insert(CodexModelOption(id: normalized, title: "Saved: \(normalized)"), at: 1)
+        }
+
+        return options
+    }
+}
+
+@MainActor
+final class CodexSessionManager {
+    static let shared = CodexSessionManager()
+
+    private var models: [UUID: CodexSessionViewModel] = [:]
+    private var controllers: [UUID: CodexSessionWindowController] = [:]
+
+    func openSession(
+        prompt: String,
+        executablePath: String,
+        workingDirectory: String,
+        modelOverride: String?,
+        reasoningEffort: CodexReasoningEffort,
+        serviceTier: CodexServiceTier
+    ) {
+        let title = CodexSessionTitleBuilder.make(for: prompt)
+        let record = CodexSessionStore.shared.createSession(
+            title: title,
+            executablePath: executablePath,
+            workingDirectory: workingDirectory,
+            modelOverride: modelOverride,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier
+        )
+        let model = CodexSessionViewModel(record: record)
+        models[model.id] = model
+
+        let controller = CodexSessionWindowController(model: model) { [weak self] sessionID in
+            self?.controllers.removeValue(forKey: sessionID)
+        }
+
+        controllers[model.id] = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        model.startInitialTurn(prompt: prompt)
+    }
+
+    func openSavedSession(recordID: UUID) {
+        if let controller = controllers[recordID] {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let model: CodexSessionViewModel
+        if let existingModel = models[recordID] {
+            model = existingModel
+        } else {
+            guard let record = CodexSessionStore.shared.session(id: recordID) else { return }
+            let newModel = CodexSessionViewModel(record: record)
+            models[recordID] = newModel
+            model = newModel
+        }
+
+        let controller = CodexSessionWindowController(model: model) { [weak self] sessionID in
+            self?.controllers.removeValue(forKey: sessionID)
+        }
+
+        controllers[model.id] = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+@MainActor
+final class CodexReaderWindowManager {
+    static let shared = CodexReaderWindowManager()
+
+    private var controllers: [UUID: CodexReaderWindowController] = [:]
+
+    func openReader(title: String, response: String) {
+        let model = CodexReaderViewModel(title: title, document: ReaderDocument(kind: .response(response)))
+        present(model)
+    }
+
+    func openFileReader(path: String) {
+        let fileURL = URL(fileURLWithPath: path)
+        guard let document = renderedDocument(for: fileURL) else {
+            NSWorkspace.shared.open(fileURL)
+            return
+        }
+
+        let model = CodexReaderViewModel(title: fileURL.lastPathComponent, document: document)
+        present(model)
+    }
+
+    private func present(_ model: CodexReaderViewModel) {
+        let controller = CodexReaderWindowController(model: model) { [weak self] readerID in
+            self?.controllers.removeValue(forKey: readerID)
+        }
+
+        controllers[model.id] = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func renderedDocument(for fileURL: URL) -> ReaderDocument? {
+        guard let fileType = ReaderRenderableFileType(url: fileURL) else { return nil }
+        guard let body = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+
+        switch fileType {
+        case .html:
+            return ReaderDocument(
+                kind: .file(
+                    path: fileURL.path,
+                    body: body,
+                    baseURL: fileURL.deletingLastPathComponent()
+                )
+            )
+        case .markdown:
+            return ReaderDocument(
+                kind: .file(
+                    path: fileURL.path,
+                    body: body,
+                    baseURL: nil
+                )
+            )
+        }
+    }
+}
+
+@MainActor
+final class CodexSessionWindowController: NSWindowController, NSWindowDelegate {
+    private let model: CodexSessionViewModel
+    private let onClose: (UUID) -> Void
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(model: CodexSessionViewModel, onClose: @escaping (UUID) -> Void) {
+        self.model = model
+        self.onClose = onClose
+
+        let contentView = CodexSessionView(model: model)
+        let hostingController = NSHostingController(rootView: contentView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 780),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = model.windowTitle
+        window.titlebarAppearsTransparent = false
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hostingController
+
+        super.init(window: window)
+
+        window.delegate = self
+
+        model.$windowTitle
+            .receive(on: RunLoop.main)
+            .sink { [weak window] title in
+                window?.title = title
+            }
+            .store(in: &cancellables)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose(model.id)
+    }
+}
+
+@MainActor
+final class CodexReaderWindowController: NSWindowController, NSWindowDelegate {
+    private let model: CodexReaderViewModel
+    private let onClose: (UUID) -> Void
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(model: CodexReaderViewModel, onClose: @escaping (UUID) -> Void) {
+        self.model = model
+        self.onClose = onClose
+
+        let contentView = CodexReaderWindowView(model: model)
+        let hostingController = NSHostingController(rootView: contentView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1040, height: 820),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = model.title
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unifiedCompact
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hostingController
+
+        super.init(window: window)
+
+        window.delegate = self
+
+        model.$title
+            .receive(on: RunLoop.main)
+            .sink { [weak window] title in
+                window?.title = title
+            }
+            .store(in: &cancellables)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose(model.id)
+    }
+}
+
+@MainActor
+final class CodexSessionViewModel: ObservableObject {
+    private static let maxActivityEntries = 160
+    private static let maxVisibleActivityEntries = 120
+
+    let id: UUID
+
+    @Published var windowTitle = "Codex Session"
+    @Published var threadID: String?
+    @Published var status = "Ready"
+    @Published var composerText = ""
+    @Published var latestResponse = ""
+    @Published var activity: [CodexActivityEntry] = []
+    @Published var isBusy = false
+    @Published var modelOverride = "" {
+        didSet {
+            guard oldValue != modelOverride else { return }
+            syncSessionRecord()
+        }
+    }
+    @Published var reasoningEffort: CodexReasoningEffort = .useConfigDefault {
+        didSet {
+            guard oldValue != reasoningEffort else { return }
+            syncSessionRecord()
+        }
+    }
+    @Published var serviceTier: CodexServiceTier = .useConfigDefault {
+        didSet {
+            guard oldValue != serviceTier else { return }
+            syncSessionRecord()
+        }
+    }
+
+    private let runner: CodexRunner
+    private let executablePath: String
+    private let workingDirectory: String
+    private var persistTask: Task<Void, Never>?
+
+    init(record: CodexSessionRecord) {
+        id = record.id
+        windowTitle = record.title
+        threadID = record.threadID
+        latestResponse = record.latestResponse
+        activity = record.activity
+        modelOverride = record.modelOverride ?? ""
+        reasoningEffort = record.reasoningEffort ?? .useConfigDefault
+        serviceTier = record.serviceTier ?? .useConfigDefault
+        executablePath = record.executablePath
+        workingDirectory = record.workingDirectory
+        runner = CodexRunner(
+            executablePath: record.executablePath,
+            workingDirectory: record.workingDirectory,
+            initialThreadID: record.threadID
+        )
+        bindRunner()
+    }
+
+    func startInitialTurn(prompt: String) {
+        send(prompt: prompt)
+    }
+
+    func sendComposerText() {
+        let prompt = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        composerText = ""
+        send(prompt: prompt)
+    }
+
+    func close() {
+        runner.cancel()
+    }
+
+    func stopCurrentTurn() {
+        runner.cancel()
+    }
+
+    func openReader() {
+        let trimmedResponse = latestResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedResponse.isEmpty else { return }
+
+        let title: String
+        if let threadID {
+            title = "Codex Reader • \(threadID.prefix(8))"
+        } else {
+            title = "Codex Reader"
+        }
+
+        CodexReaderWindowManager.shared.openReader(title: title, response: trimmedResponse)
+    }
+
+    var visibleActivity: [CodexActivityEntry] {
+        Array(activity.suffix(Self.maxVisibleActivityEntries))
+    }
+
+    fileprivate var visibleBlocks: [CodexActivityBlock] {
+        CodexActivityBlock.make(from: visibleActivity)
+    }
+
+    var hiddenActivityCount: Int {
+        max(0, activity.count - visibleActivity.count)
+    }
+
+    private func bindRunner() {
+        runner.onActivity = { [weak self] entry in
+            guard let self else { return }
+            if
+                let sourceID = entry.sourceID,
+                let index = self.activity.lastIndex(where: { $0.sourceID == sourceID })
+            {
+                let existing = self.activity[index]
+                let replacement = CodexActivityEntry(
+                    id: existing.id,
+                    sourceID: entry.sourceID,
+                    groupID: entry.groupID ?? existing.groupID,
+                    kind: entry.kind,
+                    blockKind: entry.blockKind,
+                    title: entry.title,
+                    detail: entry.detail,
+                    detailStyle: entry.detailStyle,
+                    command: entry.command,
+                    relatedFiles: entry.relatedFiles,
+                    createdAt: existing.createdAt
+                )
+                self.activity[index] = replacement
+            } else {
+                self.activity.append(entry)
+            }
+            self.trimActivity()
+            self.requestPersist()
+        }
+
+        runner.onStateChange = { [weak self] running in
+            guard let self else { return }
+            self.isBusy = running
+            if running {
+                self.status = "Running Codex..."
+            }
+            self.requestPersist(immediate: !running)
+        }
+
+        runner.onThreadID = { [weak self] threadID in
+            guard let self else { return }
+            self.threadID = threadID
+            self.windowTitle = "Codex • \(threadID.prefix(8))"
+            self.status = "Session \(threadID)"
+            self.requestPersist(immediate: true)
+        }
+
+        runner.onTurnCompleted = { [weak self] result in
+            guard let self else { return }
+            self.latestResponse = result.response
+            self.status = result.sessionID.map { "Ready • \($0)" } ?? "Ready"
+            self.requestPersist(immediate: true)
+        }
+
+        runner.onTurnFailed = { [weak self] message in
+            guard let self else { return }
+            self.status = "Codex failed"
+            self.activity.append(
+                CodexActivityEntry(
+                    kind: .error,
+                    title: "Turn Failed",
+                    detail: message
+                )
+            )
+            self.trimActivity()
+            self.requestPersist(immediate: true)
+        }
+
+        runner.onTurnInterrupted = { [weak self] message in
+            guard let self else { return }
+            self.status = message
+            self.activity.append(
+                CodexActivityEntry(
+                    kind: .warning,
+                    title: "Turn Interrupted",
+                    detail: "The current Codex turn was stopped by the user."
+                )
+            )
+            self.trimActivity()
+            self.requestPersist(immediate: true)
+        }
+    }
+
+    private func send(prompt: String) {
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else { return }
+
+        do {
+            if isBusy {
+                try runner.steer(prompt: trimmedPrompt)
+                return
+            }
+
+            if let threadID {
+                try runner.run(
+                    command: .resume(
+                        sessionID: threadID,
+                        prompt: trimmedPrompt,
+                        modelOverride: modelOverride,
+                        reasoningEffort: reasoningEffort,
+                        serviceTier: serviceTier
+                    )
+                )
+            } else {
+                windowTitle = CodexSessionTitleBuilder.make(for: trimmedPrompt)
+                requestPersist(immediate: true)
+                try runner.run(
+                    command: .start(
+                        prompt: trimmedPrompt,
+                        modelOverride: modelOverride,
+                        reasoningEffort: reasoningEffort,
+                        serviceTier: serviceTier
+                    )
+                )
+            }
+        } catch {
+            status = "Codex failed"
+            activity.append(
+                CodexActivityEntry(
+                    kind: .error,
+                    title: "Launch Failed",
+                    detail: error.localizedDescription
+                )
+            )
+            trimActivity()
+            requestPersist(immediate: true)
+        }
+    }
+
+    private func trimActivity() {
+        if activity.count > Self.maxActivityEntries {
+            activity = Array(activity.suffix(Self.maxActivityEntries))
+        }
+    }
+
+    private func requestPersist(immediate: Bool = false) {
+        persistTask?.cancel()
+
+        if immediate {
+            syncSessionRecord()
+            return
+        }
+
+        persistTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            self.syncSessionRecord()
+        }
+    }
+
+    private func syncSessionRecord() {
+        CodexSessionStore.shared.updateSession(id: id) { record in
+            record.title = windowTitle
+            record.threadID = threadID
+            record.latestResponse = latestResponse
+            record.activity = activity
+            record.executablePath = executablePath
+            record.workingDirectory = workingDirectory
+            record.modelOverride = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : modelOverride
+            record.reasoningEffort = reasoningEffort
+            record.serviceTier = serviceTier
+            record.isBusy = isBusy
+        }
+    }
+}
+
+@MainActor
+final class CodexReaderViewModel: ObservableObject {
+    let id = UUID()
+
+    @Published var title: String
+    @Published var document: ReaderDocument
+
+    init(title: String, document: ReaderDocument) {
+        self.title = title
+        self.document = document
+    }
+}
+
+struct ReaderDocument {
+    enum Kind {
+        case response(String)
+        case file(path: String, body: String, baseURL: URL?)
+    }
+
+    let kind: Kind
+
+    var body: String {
+        switch kind {
+        case let .response(text):
+            return text
+        case let .file(_, body, _):
+            return body
+        }
+    }
+
+    var filePath: String? {
+        switch kind {
+        case .response:
+            return nil
+        case let .file(path, _, _):
+            return path
+        }
+    }
+
+    var baseURL: URL? {
+        switch kind {
+        case .response:
+            return nil
+        case let .file(_, _, baseURL):
+            return baseURL
+        }
+    }
+}
+
+@MainActor
+private struct CodexActivityBlock: Identifiable {
+    let id: String
+    let kind: CodexActivityBlockKind
+    let entries: [CodexActivityEntry]
+
+    var createdAt: Date { entries.first?.createdAt ?? .now }
+    var updatedAt: Date { entries.last?.createdAt ?? createdAt }
+    var latestEntry: CodexActivityEntry { entries.last! }
+
+    var title: String {
+        switch kind {
+        case .command:
+            return latestEntry.title.contains("Completed") ? "Command" : latestEntry.title
+        case .tool:
+            return "Tool"
+        case .patch:
+            return "Patch"
+        case .reasoning:
+            return latestEntry.title
+        case .final:
+            return "Final"
+        case .system:
+            return latestEntry.title
+        }
+    }
+
+    var command: String? {
+        entries.compactMap(\.command).last
+    }
+
+    var detail: String? {
+        entries.reversed().compactMap(\.detail).first(where: { !$0.isEmpty })
+    }
+
+    var relatedFiles: [CodexActivityFile] {
+        var ordered: [CodexActivityFile] = []
+        var seen: Set<String> = []
+
+        for entry in entries {
+            for file in entry.relatedFiles where !seen.contains(file.id) {
+                ordered.append(file)
+                seen.insert(file.id)
+            }
+        }
+
+        return ordered
+    }
+
+    var summary: String? {
+        switch kind {
+        case .command:
+            if let detail {
+                return detail
+            }
+            return latestEntry.title
+        case .tool, .reasoning, .patch, .final, .system:
+            return detail
+        }
+    }
+
+    static func make(from entries: [CodexActivityEntry]) -> [CodexActivityBlock] {
+        var order: [String] = []
+        var grouped: [String: [CodexActivityEntry]] = [:]
+
+        for entry in entries {
+            let key = entry.groupID ?? entry.sourceID ?? entry.id.uuidString
+            if grouped[key] == nil {
+                order.append(key)
+                grouped[key] = []
+            }
+            grouped[key, default: []].append(entry)
+        }
+
+        return order.compactMap { key in
+            guard let entries = grouped[key], let first = entries.first else { return nil }
+            return CodexActivityBlock(id: key, kind: entries.last?.blockKind ?? first.blockKind, entries: entries)
+        }
+    }
+}
+
+@MainActor
+private final class ComposerNSTextView: NSTextView {
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            InAppTextInsertionManager.shared.register(self)
+        }
+        return didBecome
+    }
+
+    override func resignFirstResponder() -> Bool {
+        InAppTextInsertionManager.shared.unregister(self)
+        return super.resignFirstResponder()
+    }
+}
+
+@MainActor
+private struct CodexSessionView: View {
+    @ObservedObject var model: CodexSessionViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+
+            VSplitView {
+                activityPane
+                resultPane
+            }
+
+            Divider()
+            composerPane
+        }
+        .frame(minWidth: 860, minHeight: 680)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.windowTitle)
+                        .font(.headline)
+
+                    HStack(spacing: 10) {
+                        Text(model.status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let threadID = model.threadID {
+                            Text(threadID)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 8) {
+                    compactModelPicker
+                    compactThinkingPicker
+                    compactSpeedPicker
+
+                    if model.isBusy {
+                        Button("Stop") {
+                            model.stopCurrentTurn()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+    }
+
+    private var compactModelPicker: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Model")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Picker("Model", selection: $model.modelOverride) {
+                ForEach(CodexModelCatalog.options(currentModel: model.modelOverride)) { option in
+                    Text(option.title).tag(option.id)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .disabled(model.isBusy)
+            .frame(width: 170, alignment: .leading)
+        }
+    }
+
+    private var compactThinkingPicker: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Think")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Picker("Think", selection: $model.reasoningEffort) {
+                ForEach(CodexReasoningEffort.allCases) { effort in
+                    Text(effort.title).tag(effort)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .disabled(model.isBusy)
+            .frame(width: 104, alignment: .leading)
+        }
+    }
+
+    private var compactSpeedPicker: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Speed")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Picker("Speed", selection: $model.serviceTier) {
+                ForEach(CodexServiceTier.allCases) { tier in
+                    Text(tier.title).tag(tier)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .disabled(model.isBusy)
+            .frame(width: 104, alignment: .leading)
+        }
+    }
+
+    private var activityPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                    Text("Activity")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                if model.hiddenActivityCount > 0 {
+                    Text("Showing latest \(model.visibleBlocks.count) blocks. Older \(model.hiddenActivityCount) raw events hidden to keep this window responsive.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            Divider()
+                .padding(.top, 10)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(model.visibleBlocks) { block in
+                            CodexActivityBlockView(block: block)
+                                .id(block.id)
+                        }
+                    }
+                    .padding(16)
+                }
+                .onChange(of: model.visibleBlocks.count) {
+                    guard let lastID = model.visibleBlocks.last?.id else { return }
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .frame(minHeight: 220)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var resultPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Latest Response")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("IN") {
+                    model.openReader()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(model.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Open this response in a clean reader window")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            Divider()
+                .padding(.top, 10)
+
+            if model.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(spacing: 12) {
+                    if model.isBusy {
+                        ProgressView()
+                            .controlSize(.regular)
+                    }
+
+                    Text(model.isBusy ? "Waiting for Codex..." : "No rendered response yet")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                RenderedResponseContainer(document: ReaderDocument(kind: .response(model.latestResponse)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var composerPane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Continue Chat")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ComposerTextView(text: $model.composerText)
+                .frame(minHeight: 84, maxHeight: 140)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+
+            HStack {
+                Text("This window resumes the same Codex session.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button(model.isBusy ? "Steer" : "Send") {
+                    model.sendComposerText()
+                }
+                .disabled(model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .keyboardShortcut(.return, modifiers: [.command])
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+@MainActor
+private struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+
+        let textView = ComposerNSTextView()
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textView.textContainerInset = NSSize(width: 8, height: 10)
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = text
+        textView.delegate = context.coordinator
+
+        context.coordinator.textView = textView
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        @Binding var text: String
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func textDidChange(_ notification: Notification) {
+            text = textView?.string ?? ""
+        }
+    }
+}
+
+@MainActor
+private struct CodexReaderWindowView: View {
+    @ObservedObject var model: CodexReaderViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let filePath = model.document.filePath {
+                HStack(spacing: 8) {
+                    Spacer()
+
+                    Button("Open In Finder") {
+                        FileLinkOpener.revealInFinder(filePath)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+
+                Divider()
+            }
+
+            RenderedResponseContainer(document: model.document, standalone: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 860, minHeight: 680)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+@MainActor
+private struct ExpandableActivityText: View {
+    let text: String
+    let font: Font
+    let lineLimit: Int?
+
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(font)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(expanded ? nil : lineLimit)
+
+            if shouldOfferExpansion {
+                Button(expanded ? "Show less" : "Show more") {
+                    expanded.toggle()
+                }
+                .buttonStyle(.plain)
+                .font(.caption2)
+            }
+        }
+    }
+
+    private var shouldOfferExpansion: Bool {
+        text.count > 480 || text.contains("\n\n") || text.split(separator: "\n").count > 12
+    }
+}
+
+@MainActor
+private struct CodexActivityBlockView: View {
+    let block: CodexActivityBlock
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color)
+
+                Text(block.updatedAt.formatted(date: .omitted, time: .standard))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            if let command = block.command, !command.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Command")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    Text(command)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.black.opacity(0.06))
+                        )
+                        .contextMenu {
+                            Button("Copy Command") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(command, forType: .string)
+                            }
+                        }
+                }
+            }
+
+            if let detail = block.summary, !detail.isEmpty {
+                ExpandableActivityText(
+                    text: detail,
+                    font: detailFont,
+                    lineLimit: block.kind == .final ? 8 : 12
+                )
+            }
+
+            if !block.relatedFiles.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(block.relatedFiles.count == 1 ? "File" : "Files")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(block.relatedFiles) { file in
+                        CodexActivityFileCard(file: file)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    private var title: String {
+        switch block.kind {
+        case .command:
+            if block.latestEntry.title.contains("Completed") {
+                return "Command Completed"
+            }
+            if block.latestEntry.title.contains("Started") {
+                return "Command Running"
+            }
+            return "Command"
+        case .tool:
+            return block.latestEntry.title
+        case .patch:
+            return "Patch Applied"
+        case .reasoning:
+            return block.latestEntry.title
+        case .final:
+            return "Final Response"
+        case .system:
+            return block.latestEntry.title
+        }
+    }
+
+    private var color: Color {
+        switch block.kind {
+        case .system:
+            return .secondary
+        case .reasoning:
+            return .primary
+        case .command:
+            return .orange
+        case .tool:
+            return .teal
+        case .patch:
+            return .green
+        case .final:
+            return .blue
+        }
+    }
+
+    private var detailFont: Font {
+        switch block.latestEntry.detailStyle {
+        case .body:
+            return block.kind == .final ? .body : .caption
+        case .monospaced:
+            return .caption.monospaced()
+        }
+    }
+}
+
+@MainActor
+private struct CodexActivityFileCard: View {
+    let file: CodexActivityFile
+
+    private var isRenderableDocument: Bool {
+        ReaderRenderableFileType(path: file.path) != nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                FileLinkOpener.openPath(file.path, line: nil)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(.blue)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(URL(fileURLWithPath: file.path).lastPathComponent)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Text(file.kindLabel.map { "\($0) · \(file.path)" } ?? file.path)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                if isRenderableDocument {
+                    Button("Open Rendered") {
+                        CodexReaderWindowManager.shared.openFileReader(path: file.path)
+                    }
+
+                    Button("Open Raw") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: file.path))
+                    }
+                } else {
+                    Button("Open") {
+                        FileLinkOpener.openPath(file.path, line: nil)
+                    }
+                }
+
+                Button("Reveal in Finder") {
+                    FileLinkOpener.revealInFinder(file.path)
+                }
+
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(file.path, forType: .string)
+                }
+            }
+
+            if let diff = file.diff?.trimmingCharacters(in: .whitespacesAndNewlines), !diff.isEmpty {
+                DisclosureGroup("Show diff") {
+                    Text(diff)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+                .font(.caption)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
+@MainActor
+private struct RenderedResponseContainer: View {
+    let document: ReaderDocument
+    var standalone = false
+
+    var body: some View {
+        switch RenderedDocument.from(document: document) {
+        case let .html(html, baseURL):
+            WebDocumentView(html: html, baseURL: baseURL, standalone: standalone)
+        case let .richText(attributedString):
+            RichTextContentView(attributedString: attributedString, standalone: standalone)
+        }
+    }
+}
+
+private enum RenderedDocument {
+    case html(String, baseURL: URL?)
+    case richText(NSAttributedString)
+
+    static func from(document: ReaderDocument) -> RenderedDocument {
+        let body = document.body
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if looksLikeHTML(trimmed) {
+            return .html(HTMLDocumentRenderer.renderRawHTML(body), baseURL: document.baseURL)
+        }
+
+        return .richText(AttributedTextRenderer.render(response: body))
+    }
+
+    private static func looksLikeHTML(_ text: String) -> Bool {
+        let lowercase = text.lowercased()
+        return lowercase.hasPrefix("<!doctype html") ||
+            lowercase.hasPrefix("<html") ||
+            lowercase.contains("<body") ||
+            lowercase.contains("<main") ||
+            lowercase.contains("<div")
+    }
+}
+
+private enum AttributedTextRenderer {
+    static func render(response: String) -> NSAttributedString {
+        let preprocessed = MarkdownLinkRewriter.rewrite(text: response)
+
+        if let attributed = try? AttributedString(
+            markdown: preprocessed,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) {
+            let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+            style(mutable)
+            FileLinkifier.linkifyBarePaths(in: mutable)
+            return mutable
+        }
+
+        let mutable = NSMutableAttributedString(
+            string: response,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        style(mutable)
+        FileLinkifier.linkifyBarePaths(in: mutable)
+        return mutable
+    }
+
+    private static func style(_ attributedString: NSMutableAttributedString) {
+        let fullRange = NSRange(location: 0, length: attributedString.length)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 4
+        paragraphStyle.paragraphSpacing = 9
+
+        attributedString.addAttributes(
+            [
+                .paragraphStyle: paragraphStyle,
+                .foregroundColor: NSColor.labelColor,
+            ],
+            range: fullRange
+        )
+    }
+}
+
+private enum HTMLDocumentRenderer {
+    static func renderRawHTML(_ response: String) -> String {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.range(of: #"<html[\s>]|<!doctype html"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return injectPresentationTheme(into: response)
+        }
+
+        return """
+        <!doctype html>
+        <html>
+        <head>
+        \(themeHead)
+        </head>
+        <body class="codex-user-html">
+        \(response)
+        </body>
+        </html>
+        """
+    }
+
+    private static func injectPresentationTheme(into html: String) -> String {
+        if html.range(of: #"</head>"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return html.replacingOccurrences(
+                of: "</head>",
+                with: "\(themeHead)</head>",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+
+        if html.range(of: #"<html[\s>]"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return html.replacingOccurrences(
+                of: #"<html([^>]*)>"#,
+                with: "<html$1><head>\(themeHead)</head>",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+
+        return """
+        <!doctype html>
+        <html>
+        <head>
+        \(themeHead)
+        </head>
+        <body>
+        \(html)
+        </body>
+        </html>
+        """
+    }
+
+    private static func fallbackDocument(for response: String) -> String {
+        """
+        <!doctype html>
+        <html>
+        <head>
+        \(themeHead)
+        </head>
+        <body>
+        <pre>\(escapeHTML(response))</pre>
+        </body>
+        </html>
+        """
+    }
+
+    private static func escapeHTML(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static let themeHead = """
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+    :root {
+      color-scheme: light;
+      --page: #f4efe7;
+      --page-alt: #fbf8f2;
+      --ink: #18212b;
+      --muted: #5e6a74;
+      --line: rgba(24, 33, 43, 0.12);
+      --link: #005bd3;
+      --code-bg: #16202a;
+      --code-ink: #f5f7fb;
+      --quote: #a4642f;
+      --shadow: 0 24px 60px rgba(17, 24, 32, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at top left, rgba(193, 140, 71, 0.12), transparent 28%),
+        linear-gradient(180deg, var(--page) 0%, var(--page-alt) 100%);
+      color: var(--ink);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+      line-height: 1.65;
+    }
+
+    body {
+      padding: 40px 28px 56px;
+    }
+
+    body > * {
+      max-width: 920px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+      color: #101722;
+      line-height: 1.15;
+      margin-top: 1.4em;
+      margin-bottom: 0.55em;
+      font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+      letter-spacing: -0.03em;
+    }
+
+    h1 { font-size: 2.3rem; }
+    h2 { font-size: 1.7rem; }
+    h3 { font-size: 1.3rem; }
+
+    p, ul, ol, pre, blockquote, table {
+      margin-top: 0;
+      margin-bottom: 1.05em;
+    }
+
+    ul, ol {
+      padding-left: 1.4em;
+    }
+
+    li + li {
+      margin-top: 0.22em;
+    }
+
+    a {
+      color: var(--link);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(0, 91, 211, 0.25);
+    }
+
+    a:hover {
+      border-bottom-color: rgba(0, 91, 211, 0.7);
+    }
+
+    pre, code {
+      font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      box-shadow: var(--shadow);
+      white-space: pre-wrap;
+    }
+
+    code {
+      font-size: 0.92em;
+      background: rgba(17, 24, 32, 0.08);
+      padding: 0.12em 0.35em;
+      border-radius: 0.4em;
+    }
+
+    pre code {
+      background: transparent;
+      padding: 0;
+      color: inherit;
+    }
+
+    blockquote {
+      border-left: 4px solid rgba(164, 100, 47, 0.35);
+      margin-left: 0;
+      padding: 0.2em 0 0.2em 1em;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: rgba(255, 255, 255, 0.6);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 12px 30px rgba(17, 24, 32, 0.06);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+      font-size: 0.82rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(24, 33, 43, 0.04);
+    }
+
+    hr {
+      border: 0;
+      height: 1px;
+      background: var(--line);
+      margin: 2.2em auto;
+    }
+
+    img {
+      max-width: 100%;
+      border-radius: 16px;
+      display: block;
+      box-shadow: var(--shadow);
+    }
+
+    .codex-user-html {
+      padding-top: 28px;
+    }
+    </style>
+    """
+}
+
+private enum MarkdownLinkRewriter {
+    private static let markdownLinkRegex = try! NSRegularExpression(pattern: #"\]\((<)?(/[^)\s>]+)(>)?\)"#)
+
+    static func rewrite(text: String) -> String {
+        let source = text as NSString
+        let range = NSRange(location: 0, length: source.length)
+        let mutable = NSMutableString(string: text)
+        let matches = markdownLinkRegex.matches(in: text, range: range).reversed()
+
+        for match in matches {
+            guard match.numberOfRanges >= 3 else { continue }
+            let rawTarget = source.substring(with: match.range(at: 2))
+            let customURL = FileLinkOpener.makeCustomURL(fromToken: rawTarget)
+            mutable.replaceCharacters(in: match.range, with: "](\(customURL.absoluteString))")
+        }
+
+        return mutable as String
+    }
+}
+
+@MainActor
+private struct RichTextContentView: NSViewRepresentable {
+    let attributedString: NSAttributedString
+    var standalone = false
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = standalone ? NSSize(width: 28, height: 28) : NSSize(width: 18, height: 18)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.delegate = context.coordinator
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.systemBlue,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
+
+        textView.textStorage?.setAttributedString(attributedString)
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        textView.textStorage?.setAttributedString(attributedString)
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL else { return false }
+            FileLinkOpener.open(url)
+            return true
+        }
+    }
+}
+
+private enum FileLinkifier {
+    private static let barePathRegex = try! NSRegularExpression(pattern: #"/Users/[^\s\])>]+(?::\d+)?"#)
+
+    static func linkifyBarePaths(in attributedString: NSMutableAttributedString) {
+        let fullText = attributedString.string
+        let range = NSRange(fullText.startIndex..., in: fullText)
+
+        barePathRegex.enumerateMatches(in: fullText, range: range) { match, _, _ in
+            guard let match else { return }
+            let token = (fullText as NSString).substring(with: match.range)
+            let customURL = FileLinkOpener.makeCustomURL(fromToken: token)
+            attributedString.addAttribute(.link, value: customURL, range: match.range)
+        }
+    }
+}
+
+private enum ReaderRenderableFileType {
+    case html
+    case markdown
+
+    init?(path: String) {
+        let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        switch fileExtension {
+        case "html", "htm":
+            self = .html
+        case "md", "markdown":
+            self = .markdown
+        default:
+            return nil
+        }
+    }
+
+    init?(url: URL) {
+        self.init(path: url.path)
+    }
+}
+
+private enum FileLinkOpener {
+    private static let scheme = "miwhisper-open"
+
+    static func makeCustomURL(fromToken token: String) -> URL {
+        let parsed = parseToken(token)
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "file"
+        components.queryItems = [
+            URLQueryItem(name: "path", value: parsed.path),
+            URLQueryItem(name: "line", value: parsed.line.map(String.init)),
+        ].compactMap { $0.value == nil ? nil : $0 }
+
+        return components.url!
+    }
+
+    static func open(_ url: URL) {
+        guard url.scheme == scheme else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        guard
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let path = components.queryItems?.first(where: { $0.name == "path" })?.value
+        else {
+            return
+        }
+
+        let line = components.queryItems?
+            .first(where: { $0.name == "line" })?
+            .value
+            .flatMap(Int.init)
+
+        openPath(path, line: line)
+    }
+
+    static func openPath(_ path: String, line: Int?) {
+        if line == nil, ReaderRenderableFileType(path: path) != nil, FileManager.default.fileExists(atPath: path) {
+            Task { @MainActor in
+                CodexReaderWindowManager.shared.openFileReader(path: path)
+            }
+            return
+        }
+
+        if let line, FileManager.default.fileExists(atPath: path) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/xed")
+            process.arguments = ["-l", String(line), path]
+            try? process.run()
+            return
+        }
+
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    static func revealInFinder(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private static func parseToken(_ token: String) -> (path: String, line: Int?) {
+        let trimmed = token
+            .trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let range = trimmed.range(of: #":\d+$"#, options: .regularExpression) {
+            let path = String(trimmed[..<range.lowerBound])
+            let lineString = String(trimmed[range]).dropFirst()
+            return (path, Int(lineString))
+        }
+
+        return (trimmed, nil)
+    }
+}
+
+@MainActor
+private struct WebDocumentView: NSViewRepresentable {
+    let html: String
+    var baseURL: URL? = nil
+    var standalone = false
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = false
+        configuration.defaultWebpagePreferences = preferences
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.allowsBackForwardNavigationGestures = standalone
+        context.coordinator.lastLoadedHTML = html
+        webView.loadHTMLString(html, baseURL: baseURL)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        guard context.coordinator.lastLoadedHTML != html else { return }
+        context.coordinator.lastLoadedHTML = html
+        webView.loadHTMLString(html, baseURL: baseURL)
+    }
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.lastLoadedHTML = nil
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var lastLoadedHTML: String?
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            if let url = navigationAction.request.url, navigationAction.navigationType == .linkActivated {
+                FileLinkOpener.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+
+            decisionHandler(.allow)
+        }
+    }
+}

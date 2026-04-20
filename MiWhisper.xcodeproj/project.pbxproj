@@ -1,0 +1,388 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000100 /* MiWhisperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000200 /* MiWhisperApp.swift */; };
+		A00000000000000000000101 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000201 /* AppDelegate.swift */; };
+		A00000000000000000000102 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000202 /* ContentView.swift */; };
+		A00000000000000000000103 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000203 /* SettingsView.swift */; };
+		A00000000000000000000104 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000204 /* AppState.swift */; };
+		A00000000000000000000105 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000205 /* AudioRecorder.swift */; };
+		A00000000000000000000106 /* WhisperTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000206 /* WhisperTranscriber.swift */; };
+			A00000000000000000000107 /* TextPaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000207 /* TextPaster.swift */; };
+		A00000000000000000000108 /* HotkeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000208 /* HotkeyMonitor.swift */; };
+		A00000000000000000000109 /* NotificationPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000020B /* NotificationPresenter.swift */; };
+		A0000000000000000000010A /* AccessibilityTextInsertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000020C /* AccessibilityTextInsertion.swift */; };
+		A0000000000000000000010B /* WhisperBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000020F /* WhisperBridge.mm */; };
+		A0000000000000000000010C /* CodexRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000210 /* CodexRunner.swift */; };
+		A0000000000000000000010D /* CodexPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000211 /* CodexPanelController.swift */; };
+		A0000000000000000000010E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000212 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A00000000000000000000200 /* MiWhisperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiWhisperApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000201 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A00000000000000000000202 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A00000000000000000000203 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A00000000000000000000204 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A00000000000000000000205 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		A00000000000000000000206 /* WhisperTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperTranscriber.swift; sourceTree = "<group>"; };
+		A00000000000000000000207 /* TextPaster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPaster.swift; sourceTree = "<group>"; };
+		A00000000000000000000208 /* HotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitor.swift; sourceTree = "<group>"; };
+			A00000000000000000000209 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A0000000000000000000020A /* MiWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MiWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0000000000000000000020B /* NotificationPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationPresenter.swift; sourceTree = "<group>"; };
+		A0000000000000000000020C /* AccessibilityTextInsertion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTextInsertion.swift; sourceTree = "<group>"; };
+		A0000000000000000000020D /* MiWhisper-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MiWhisper-Bridging-Header.h"; sourceTree = "<group>"; };
+		A0000000000000000000020E /* WhisperBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WhisperBridge.h; sourceTree = "<group>"; };
+		A0000000000000000000020F /* WhisperBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WhisperBridge.mm; sourceTree = "<group>"; };
+		A00000000000000000000210 /* CodexRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexRunner.swift; sourceTree = "<group>"; };
+		A00000000000000000000211 /* CodexPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexPanelController.swift; sourceTree = "<group>"; };
+		A00000000000000000000212 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00000000000000000000300 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000400 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000401 /* MiWhisper */,
+				A00000000000000000000402 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000401 /* MiWhisper */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000200 /* MiWhisperApp.swift */,
+				A00000000000000000000201 /* AppDelegate.swift */,
+				A00000000000000000000202 /* ContentView.swift */,
+				A00000000000000000000203 /* SettingsView.swift */,
+				A0000000000000000000020D /* MiWhisper-Bridging-Header.h */,
+				A00000000000000000000403 /* Services */,
+				A00000000000000000000404 /* Resources */,
+			);
+			path = MiWhisper;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000402 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000020A /* MiWhisper.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000403 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000204 /* AppState.swift */,
+				A00000000000000000000205 /* AudioRecorder.swift */,
+				A00000000000000000000206 /* WhisperTranscriber.swift */,
+				A00000000000000000000207 /* TextPaster.swift */,
+				A00000000000000000000208 /* HotkeyMonitor.swift */,
+				A0000000000000000000020B /* NotificationPresenter.swift */,
+				A0000000000000000000020C /* AccessibilityTextInsertion.swift */,
+				A0000000000000000000020E /* WhisperBridge.h */,
+				A0000000000000000000020F /* WhisperBridge.mm */,
+				A00000000000000000000210 /* CodexRunner.swift */,
+				A00000000000000000000211 /* CodexPanelController.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000404 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000212 /* Assets.xcassets */,
+				A00000000000000000000209 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000500 /* MiWhisper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000600 /* Build configuration list for PBXNativeTarget "MiWhisper" */;
+			buildPhases = (
+				A00000000000000000000700 /* Sources */,
+				A00000000000000000000300 /* Frameworks */,
+				A00000000000000000000702 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MiWhisper;
+			productName = MiWhisper;
+			productReference = A0000000000000000000020A /* MiWhisper.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000800 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A00000000000000000000500 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000601 /* Build configuration list for PBXProject "MiWhisper" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000400;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A00000000000000000000402 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000500 /* MiWhisper */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000702 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000010E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000700 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000100 /* MiWhisperApp.swift in Sources */,
+				A00000000000000000000101 /* AppDelegate.swift in Sources */,
+				A00000000000000000000102 /* ContentView.swift in Sources */,
+				A00000000000000000000103 /* SettingsView.swift in Sources */,
+				A00000000000000000000104 /* AppState.swift in Sources */,
+				A00000000000000000000105 /* AudioRecorder.swift in Sources */,
+				A00000000000000000000106 /* WhisperTranscriber.swift in Sources */,
+				A00000000000000000000107 /* TextPaster.swift in Sources */,
+				A00000000000000000000108 /* HotkeyMonitor.swift in Sources */,
+				A00000000000000000000109 /* NotificationPresenter.swift in Sources */,
+				A0000000000000000000010A /* AccessibilityTextInsertion.swift in Sources */,
+				A0000000000000000000010B /* WhisperBridge.mm in Sources */,
+				A0000000000000000000010C /* CodexRunner.swift in Sources */,
+				A0000000000000000000010D /* CodexPanelController.swift in Sources */,
+			);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000900 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+					ALWAYS_SEARCH_USER_PATHS = NO;
+					ARCHS = arm64;
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				AUTOMATION_APPLE_EVENTS = NO;
+					CLANG_ENABLE_MODULES = YES;
+					CLANG_ENABLE_OBJC_ARC = YES;
+					CODE_SIGN_STYLE = Automatic;
+					CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/build/$(CONFIGURATION)";
+					CURRENT_PROJECT_VERSION = 1;
+					DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+					ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+					ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+					GENERATE_INFOPLIST_FILE = NO;
+					HEADER_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/include",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/ggml/include",
+					);
+					INFOPLIST_FILE = MiWhisper/Resources/Info.plist;
+					LD_RUNPATH_SEARCH_PATHS = (
+						"$(inherited)",
+						"@executable_path/../Frameworks",
+					);
+					LIBRARY_SEARCH_PATHS = (
+						"$(inherited)",
+					);
+					MACOSX_DEPLOYMENT_TARGET = 14.0;
+					MARKETING_VERSION = 1.0;
+					OTHER_LDFLAGS = (
+						"$(inherited)",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/src/libwhisper.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml-cpu.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/ggml-metal/libggml-metal.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/ggml-blas/libggml-blas.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml-base.a",
+						"-framework",
+						Metal,
+						"-framework",
+						MetalKit,
+						"-framework",
+						Accelerate,
+						"-framework",
+						WebKit,
+					);
+					PRODUCT_BUNDLE_IDENTIFIER = com.miwhisper.app;
+					PRODUCT_NAME = "$(TARGET_NAME)";
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
+					SDKROOT = macosx;
+					SWIFT_OBJC_BRIDGING_HEADER = MiWhisper/MiWhisper-Bridging-Header.h;
+					SWIFT_EMIT_LOC_STRINGS = YES;
+					SWIFT_VERSION = 5.0;
+				};
+			name = Debug;
+		};
+		A00000000000000000000901 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+					ALWAYS_SEARCH_USER_PATHS = NO;
+					ARCHS = arm64;
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				AUTOMATION_APPLE_EVENTS = NO;
+					CLANG_ENABLE_MODULES = YES;
+					CLANG_ENABLE_OBJC_ARC = YES;
+					CODE_SIGN_STYLE = Automatic;
+					CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/build/$(CONFIGURATION)";
+					CURRENT_PROJECT_VERSION = 1;
+					DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+					ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+					ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+					GENERATE_INFOPLIST_FILE = NO;
+					HEADER_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/include",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/ggml/include",
+					);
+					INFOPLIST_FILE = MiWhisper/Resources/Info.plist;
+					LD_RUNPATH_SEARCH_PATHS = (
+						"$(inherited)",
+						"@executable_path/../Frameworks",
+					);
+					LIBRARY_SEARCH_PATHS = (
+						"$(inherited)",
+					);
+					MACOSX_DEPLOYMENT_TARGET = 14.0;
+					MARKETING_VERSION = 1.0;
+					OTHER_LDFLAGS = (
+						"$(inherited)",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/src/libwhisper.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml-cpu.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/ggml-metal/libggml-metal.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/ggml-blas/libggml-blas.a",
+						"$(PROJECT_DIR)/vendors/whisper.cpp/build/ggml/src/libggml-base.a",
+						"-framework",
+						Metal,
+						"-framework",
+						MetalKit,
+						"-framework",
+						Accelerate,
+						"-framework",
+						WebKit,
+					);
+					PRODUCT_BUNDLE_IDENTIFIER = com.miwhisper.app;
+					PRODUCT_NAME = "$(TARGET_NAME)";
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
+					SDKROOT = macosx;
+					SWIFT_OBJC_BRIDGING_HEADER = MiWhisper/MiWhisper-Bridging-Header.h;
+					SWIFT_EMIT_LOC_STRINGS = YES;
+					SWIFT_VERSION = 5.0;
+				};
+			name = Release;
+		};
+		A00000000000000000000902 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000903 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000600 /* Build configuration list for PBXNativeTarget "MiWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000900 /* Debug */,
+				A00000000000000000000901 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000601 /* Build configuration list for PBXProject "MiWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000902 /* Debug */,
+				A00000000000000000000903 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000800 /* Project object */;
+}
