@@ -1149,7 +1149,7 @@ private struct CodexSessionView: View {
                 )
 
             HStack {
-                Text("This window resumes the same Codex session.")
+                Text(model.isBusy ? "Type here to steer the current Codex turn." : "This window resumes the same Codex session.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
@@ -1178,6 +1178,7 @@ private struct ComposerTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
 
         let textView = ComposerNSTextView()
@@ -1189,12 +1190,21 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textContainerInset = NSSize(width: 8, height: 10)
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.string = text
         textView.delegate = context.coordinator
 
         context.coordinator.textView = textView
         scrollView.documentView = textView
+        DispatchQueue.main.async {
+            textView.window?.makeFirstResponder(textView)
+        }
         return scrollView
     }
 
@@ -1576,16 +1586,21 @@ private struct RenderedResponseContainer: View {
 
     var body: some View {
         switch RenderedDocument.from(document: document) {
-        case let .html(html, baseURL):
-            WebDocumentView(html: html, baseURL: baseURL, standalone: standalone)
+        case let .web(source):
+            WebDocumentView(source: source, standalone: standalone)
         case let .richText(attributedString):
             RichTextContentView(attributedString: attributedString, standalone: standalone)
         }
     }
 }
 
+private enum WebDocumentSource: Equatable {
+    case htmlString(String, baseURL: URL?, allowsJavaScript: Bool)
+    case file(URL, allowsJavaScript: Bool)
+}
+
 private enum RenderedDocument {
-    case html(String, baseURL: URL?)
+    case web(WebDocumentSource)
     case richText(NSAttributedString)
 
     static func from(document: ReaderDocument) -> RenderedDocument {
@@ -1593,7 +1608,17 @@ private enum RenderedDocument {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if looksLikeHTML(trimmed) {
-            return .html(HTMLDocumentRenderer.renderRawHTML(body), baseURL: document.baseURL)
+            if let filePath = document.filePath, ReaderRenderableFileType(path: filePath) == .html {
+                return .web(.file(URL(fileURLWithPath: filePath), allowsJavaScript: true))
+            }
+
+            return .web(
+                .htmlString(
+                    HTMLDocumentRenderer.renderRawHTML(body),
+                    baseURL: document.baseURL,
+                    allowsJavaScript: true
+                )
+            )
         }
 
         return .richText(AttributedTextRenderer.render(response: body))
@@ -1658,7 +1683,7 @@ private enum HTMLDocumentRenderer {
     static func renderRawHTML(_ response: String) -> String {
         let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.range(of: #"<html[\s>]|<!doctype html"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            return injectPresentationTheme(into: response)
+            return response
         }
 
         return """
@@ -1917,6 +1942,7 @@ private struct RichTextContentView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
 
         let textView = NSTextView()
@@ -1924,6 +1950,11 @@ private struct RichTextContentView: NSViewRepresentable {
         textView.isSelectable = true
         textView.drawsBackground = false
         textView.textContainerInset = standalone ? NSSize(width: 28, height: 28) : NSSize(width: 18, height: 18)
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.delegate = context.coordinator
@@ -2011,7 +2042,7 @@ private enum ActivityFileReferenceParser {
     }
 }
 
-private enum ReaderRenderableFileType {
+private enum ReaderRenderableFileType: Equatable {
     case html
     case markdown
 
@@ -2109,8 +2140,7 @@ private enum FileLinkOpener {
 
 @MainActor
 private struct WebDocumentView: NSViewRepresentable {
-    let html: String
-    var baseURL: URL? = nil
+    let source: WebDocumentSource
     var standalone = false
 
     func makeCoordinator() -> Coordinator {
@@ -2120,32 +2150,41 @@ private struct WebDocumentView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         let preferences = WKWebpagePreferences()
-        preferences.allowsContentJavaScript = false
+        preferences.allowsContentJavaScript = source.allowsJavaScript
         configuration.defaultWebpagePreferences = preferences
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsBackForwardNavigationGestures = standalone
-        context.coordinator.lastLoadedHTML = html
-        webView.loadHTMLString(html, baseURL: baseURL)
+        context.coordinator.lastSource = source
+        load(source, into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastLoadedHTML != html else { return }
-        context.coordinator.lastLoadedHTML = html
-        webView.loadHTMLString(html, baseURL: baseURL)
+        guard context.coordinator.lastSource != source else { return }
+        context.coordinator.lastSource = source
+        load(source, into: webView)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        coordinator.lastLoadedHTML = nil
+        coordinator.lastSource = nil
         webView.stopLoading()
         webView.navigationDelegate = nil
     }
 
+    private func load(_ source: WebDocumentSource, into webView: WKWebView) {
+        switch source {
+        case let .htmlString(html, baseURL, _):
+            webView.loadHTMLString(html, baseURL: baseURL)
+        case let .file(fileURL, _):
+            webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        }
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate {
-        var lastLoadedHTML: String?
+        var lastSource: WebDocumentSource?
 
         func webView(
             _ webView: WKWebView,
@@ -2159,6 +2198,15 @@ private struct WebDocumentView: NSViewRepresentable {
             }
 
             decisionHandler(.allow)
+        }
+    }
+}
+
+private extension WebDocumentSource {
+    var allowsJavaScript: Bool {
+        switch self {
+        case let .htmlString(_, _, allowsJavaScript), let .file(_, allowsJavaScript):
+            return allowsJavaScript
         }
     }
 }

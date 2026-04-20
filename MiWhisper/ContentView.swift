@@ -46,15 +46,15 @@ struct ContentView: View {
     private var contextualPanelMaxHeight: CGFloat {
         let screen = NSApp.keyWindow?.screen ?? NSScreen.main
         let visibleHeight = screen?.visibleFrame.height ?? 980
-        return max(860, visibleHeight - 40)
+        return max(860, visibleHeight - 16)
     }
 
     private var transcriptHistoryMaxHeight: CGFloat {
-        min(320, contextualPanelMaxHeight * 0.28)
+        min(420, contextualPanelMaxHeight * 0.34)
     }
 
     private var codexSessionsMaxHeight: CGFloat {
-        min(420, contextualPanelMaxHeight * 0.38)
+        min(560, contextualPanelMaxHeight * 0.48)
     }
 
     var body: some View {
@@ -264,8 +264,7 @@ struct ContentView: View {
             }
             .padding(16)
         }
-        .frame(width: 360)
-        .frame(maxHeight: contextualPanelMaxHeight)
+        .frame(width: 580, height: contextualPanelMaxHeight, alignment: .topLeading)
         .onAppear {
             appState.reloadTranscriptHistory()
             codexSessionStore.reload()
