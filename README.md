@@ -54,6 +54,8 @@ Optional for Codex mode:
 
 ## Quick Start
 
+For most users, the easiest install path is to ask their coding agent to do it. Point the agent at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) and let it run the setup and validation flow, then approve the required macOS permissions when prompted.
+
 1. Build the bundled `whisper.cpp` dependencies and download the default model:
 
 ```bash
