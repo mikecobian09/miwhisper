@@ -67,6 +67,37 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("General") {
+                Toggle(
+                    "Launch at login",
+                    isOn: Binding(
+                        get: { appState.launchAtLoginEnabled },
+                        set: { appState.setLaunchAtLogin($0) }
+                    )
+                )
+
+                Text("Useful for a menu bar utility. This should stay opt-in, not forced.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if appState.launchAtLoginRequiresApproval {
+                    Text("macOS requires approval for this login item. Open Login Items in System Settings and enable MiWhisper there.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+
+                    Button("Open Login Items Settings") {
+                        appState.openLoginItemsSettings()
+                    }
+                    .controlSize(.small)
+                }
+
+                if let launchAtLoginErrorMessage = appState.launchAtLoginErrorMessage {
+                    Text(launchAtLoginErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
             Section("Whisper.cpp") {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(appState.modelPresets) { preset in
@@ -204,6 +235,9 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .onAppear {
+            appState.syncLaunchAtLoginState()
         }
     }
 }

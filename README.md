@@ -26,6 +26,7 @@ The core design choices are:
 
 - Local push-to-talk dictation with `Fn`.
 - Optional `Command + Fn` bridge to Codex.
+- Optional launch-at-login behavior for a proper menu bar utility workflow.
 - Embedded `whisper.cpp` runtime with Metal acceleration on Apple Silicon.
 - Per-model presets and download helpers.
 - Clipboard-safe paste fallback when direct insertion fails.
@@ -151,6 +152,7 @@ Each Codex request opens its own session window. Closing the window does not kil
 
 Current settings include:
 
+- Launch at login.
 - Whisper model selection.
 - Model downloads for bundled presets.
 - Transcription language.

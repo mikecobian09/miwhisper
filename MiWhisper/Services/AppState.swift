@@ -3,6 +3,7 @@ import AVFoundation
 import ApplicationServices
 import Combine
 import Foundation
+import ServiceManagement
 
 struct TranscriptEntry: Codable, Identifiable {
     let id: UUID
@@ -601,6 +602,7 @@ final class AppState: ObservableObject {
     private static let codexDefaultModelKey = "codexDefaultModel"
     private static let codexReasoningEffortKey = "codexDefaultReasoningEffort"
     private static let codexServiceTierKey = "codexServiceTier"
+    private static let launchAtLoginPreferenceKey = "launchAtLoginPreference"
     private struct LastInsertionState {
         let processIdentifier: pid_t
         let trailingCharacter: Character?
@@ -620,6 +622,9 @@ final class AppState: ObservableObject {
     @Published var hasNotificationAccess = false
     @Published var hasHotkeyMonitor = false
     @Published var modelDownloadState: ModelDownloadState?
+    @Published var launchAtLoginEnabled = false
+    @Published var launchAtLoginRequiresApproval = false
+    @Published var launchAtLoginErrorMessage: String?
 
     private let defaults = UserDefaults.standard
     private let recorder = AudioRecorder()
@@ -818,6 +823,7 @@ final class AppState: ObservableObject {
     private init() {
         loadTranscriptHistory()
         hasHotkeyMonitor = HotkeyMonitor.shared.isAvailable
+        syncLaunchAtLoginState()
 
         modelDownloader.onProgress = { [weak self] presetID, bytesWritten, totalBytesExpected, startedAt in
             self?.handleModelDownloadProgress(
@@ -924,6 +930,52 @@ final class AppState: ObservableObject {
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+
+                defaults.set(enabled, forKey: Self.launchAtLoginPreferenceKey)
+                launchAtLoginErrorMessage = nil
+                syncLaunchAtLoginState()
+                statusMessage = enabled ? "Launch at login enabled" : "Launch at login disabled"
+            } catch {
+                syncLaunchAtLoginState()
+                launchAtLoginErrorMessage = error.localizedDescription
+                statusMessage = "Could not change launch at login"
+            }
+            return
+        }
+
+        launchAtLoginErrorMessage = "Launch at login requires macOS 13 or later."
+    }
+
+    func openLoginItemsSettings() {
+        if #available(macOS 13.0, *) {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+    }
+
+    func syncLaunchAtLoginState() {
+        if #available(macOS 13.0, *) {
+            let status = SMAppService.mainApp.status
+            launchAtLoginEnabled = status == .enabled
+            launchAtLoginRequiresApproval = status == .requiresApproval
+
+            if status == .notFound {
+                launchAtLoginEnabled = defaults.bool(forKey: Self.launchAtLoginPreferenceKey)
+            }
+            return
+        }
+
+        launchAtLoginEnabled = false
+        launchAtLoginRequiresApproval = false
     }
 
     func toggleRecording() {
