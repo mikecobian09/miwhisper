@@ -68,15 +68,25 @@ enum CodexWorkspaceCatalog {
 
     private static func computeAvailableWorkspaces(defaultPath: String) -> [CodexWorkspaceDescriptor] {
         var descriptorsByPath: [String: CodexWorkspaceDescriptor] = [:]
-        descriptorsByPath[defaultPath] = CodexWorkspaceDescriptor(
-            id: stableID(for: defaultPath),
-            name: displayName(for: defaultPath),
-            path: defaultPath,
-            isDefault: true
-        )
+        let defaultRootIsWorkspace = containsWorkspaceMarker(at: URL(fileURLWithPath: defaultPath))
+        var fallbackDefaultPath: String?
+
+        if defaultRootIsWorkspace {
+            descriptorsByPath[defaultPath] = CodexWorkspaceDescriptor(
+                id: stableID(for: defaultPath),
+                name: displayName(for: defaultPath),
+                path: defaultPath,
+                isDefault: true
+            )
+        }
 
         for cwd in discoveredCodexWorkingDirectories() {
-            let workspacePath = inferredWorkspaceRoot(for: cwd, defaultRoot: defaultPath)
+            let workspacePath = inferredWorkspaceRoot(
+                for: cwd,
+                defaultRoot: defaultPath,
+                collapseDefaultRoot: defaultRootIsWorkspace
+            )
+            fallbackDefaultPath = fallbackDefaultPath ?? workspacePath
             guard descriptorsByPath[workspacePath] == nil else { continue }
 
             descriptorsByPath[workspacePath] = CodexWorkspaceDescriptor(
@@ -84,6 +94,22 @@ enum CodexWorkspaceCatalog {
                 name: displayName(for: workspacePath),
                 path: workspacePath,
                 isDefault: false
+            )
+        }
+
+        if descriptorsByPath.isEmpty {
+            descriptorsByPath[defaultPath] = CodexWorkspaceDescriptor(
+                id: stableID(for: defaultPath),
+                name: displayName(for: defaultPath),
+                path: defaultPath,
+                isDefault: true
+            )
+        } else if !defaultRootIsWorkspace, let fallbackDefaultPath {
+            descriptorsByPath[fallbackDefaultPath] = CodexWorkspaceDescriptor(
+                id: stableID(for: fallbackDefaultPath),
+                name: displayName(for: fallbackDefaultPath),
+                path: fallbackDefaultPath,
+                isDefault: true
             )
         }
 
@@ -154,9 +180,14 @@ enum CodexWorkspaceCatalog {
         return cwd
     }
 
-    private static func inferredWorkspaceRoot(for cwd: String, defaultRoot: String) -> String {
+    private static func inferredWorkspaceRoot(
+        for cwd: String,
+        defaultRoot: String,
+        collapseDefaultRoot: Bool
+    ) -> String {
         let standardizedCWD = standardizedPath(cwd)
-        if standardizedCWD == defaultRoot || standardizedCWD.hasPrefix(defaultRoot + "/") {
+        if collapseDefaultRoot,
+           standardizedCWD == defaultRoot || standardizedCWD.hasPrefix(defaultRoot + "/") {
             return defaultRoot
         }
 

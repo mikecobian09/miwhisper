@@ -2,6 +2,10 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.8
+
+- Fixed installed-app workspace discovery so Codex threads are grouped by their real workspaces instead of collapsing all home-directory threads into one workspace.
+
 ## v0.1.0-alpha.7
 
 - Fixed new desktop Codex voice sessions so they start in the currently selected workspace instead of always using MiWhisper's default workspace.
