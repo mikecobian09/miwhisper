@@ -1,3 +1,4 @@
+import AppKit
 import Charts
 import SwiftUI
 
@@ -40,9 +41,62 @@ private struct TranscriptionModeToggle: View {
     }
 }
 
+private struct WorkspaceChipButton: View {
+    let workspace: CodexWorkspaceDescriptor
+    let isSelected: Bool
+    let threadCount: Int
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(workspace.name)
+                        .font(.caption.weight(isSelected ? .semibold : .regular))
+                        .lineLimit(1)
+
+                    if isSelected {
+                        Text("Selected")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+
+                Text(workspace.path)
+                    .font(.caption2)
+                    .foregroundStyle(isSelected ? Color.accentColor.opacity(0.9) : .secondary)
+                    .lineLimit(1)
+
+                Text("\(threadCount) threads")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(isSelected ? Color.accentColor.opacity(0.9) : .secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? Color.accentColor.opacity(0.55) : Color.secondary.opacity(0.16), lineWidth: 1)
+            )
+            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .help(workspace.path)
+    }
+}
+
 struct ContentView: View {
+    private static let selectedCodexWorkspaceIDKey = "miwhisper.codex.selectedWorkspaceID"
+
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var codexSessionStore = CodexSessionStore.shared
+    @ObservedObject private var codexThreadCatalog = CodexThreadCatalog.shared
+    @AppStorage(Self.selectedCodexWorkspaceIDKey) private var selectedCodexWorkspaceID = ""
     @State private var selectedStatsPeriod: UsageStatsPeriod = .week
 
     private var contextualPanelMaxHeight: CGFloat {
@@ -64,6 +118,40 @@ struct ContentView: View {
             GridItem(.flexible(minimum: 120), spacing: 8),
             GridItem(.flexible(minimum: 120), spacing: 8)
         ]
+    }
+
+    private var workspaceGridColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 0), spacing: 8),
+            GridItem(.flexible(minimum: 0), spacing: 8)
+        ]
+    }
+
+    private var codexWorkspaces: [CodexWorkspaceDescriptor] {
+        CodexWorkspaceCatalog.availableWorkspaces(defaultRoot: appState.workspaceRoot)
+    }
+
+    private var selectedCodexWorkspace: CodexWorkspaceDescriptor? {
+        if let selected = codexWorkspaces.first(where: { $0.id == selectedCodexWorkspaceID }) {
+            return selected
+        }
+        return codexWorkspaces.first(where: \.isDefault) ?? codexWorkspaces.first
+    }
+
+    private var filteredCodexEntries: [CodexThreadListEntry] {
+        guard let workspace = selectedCodexWorkspace else { return codexThreadCatalog.entries }
+
+        let matchedByPath = codexThreadCatalog.entries.filter { entry in
+            codexEntry(entry, belongsTo: workspace)
+        }
+
+        if matchedByPath.isEmpty {
+            return codexThreadCatalog.entries.filter { entry in
+                entry.workspaceName.localizedCaseInsensitiveCompare(workspace.name) == .orderedSame
+            }
+        }
+
+        return matchedByPath
     }
 
     var body: some View {
@@ -282,11 +370,21 @@ struct ContentView: View {
             appState.reloadTranscriptHistory()
             appState.reloadUsageDailyBuckets()
             codexSessionStore.reload()
+            normalizeSelectedCodexWorkspace()
+            reloadCodexThreadCatalog()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             appState.reloadTranscriptHistory()
             appState.reloadUsageDailyBuckets()
             codexSessionStore.reload()
+            normalizeSelectedCodexWorkspace()
+            reloadCodexThreadCatalog()
+        }
+        .onReceive(codexSessionStore.$sessions) { _ in
+            reloadCodexThreadCatalog()
+        }
+        .onChange(of: selectedCodexWorkspaceID) {
+            reloadCodexThreadCatalog()
         }
     }
 
@@ -358,35 +456,55 @@ struct ContentView: View {
     }
 
     private var codexSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let entries = filteredCodexEntries
+        let workspaceName = selectedCodexWorkspace?.name ?? "selected workspace"
+
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Codex")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             codexGlobalControls
+            codexWorkspaceSummary
 
-            if codexSessionStore.sessions.isEmpty {
-                Text("No saved Codex sessions yet")
+            HStack(spacing: 8) {
+                Text("Catalog · \(codexThreadCatalog.entries.count) total")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Reload") {
+                    codexSessionStore.reload()
+                    normalizeSelectedCodexWorkspace()
+                    reloadCodexThreadCatalog()
+                }
+                .font(.caption2)
+                .buttonStyle(.borderless)
+            }
+
+            if entries.isEmpty {
+                Text("No Codex threads found in \(workspaceName). Catalog has \(codexThreadCatalog.entries.count) total threads.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Sessions")
+                Text("Threads · \(workspaceName) · \(entries.count)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(codexSessionStore.sessions.prefix(12)) { session in
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(entries) { entry in
                             Button {
-                                CodexSessionManager.shared.openSavedSession(recordID: session.id)
+                                openCodexThread(entry)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
-                                        Text(session.title)
+                                        Text(entry.title)
                                             .lineLimit(1)
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                        if session.isBusy ?? false {
+                                        if entry.isBusy {
                                             HStack(spacing: 4) {
                                                 ProgressView()
                                                     .controlSize(.small)
@@ -396,7 +514,7 @@ struct ContentView: View {
                                             }
                                         }
                                     }
-                                    Text(codexSessionSubtitle(for: session))
+                                    Text(codexSessionSubtitle(for: entry))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
@@ -410,6 +528,71 @@ struct ContentView: View {
                 .frame(maxHeight: codexSessionsMaxHeight)
             }
         }
+    }
+
+    private var codexWorkspaceSummary: some View {
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Workspaces · \(codexWorkspaces.count)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let selectedCodexWorkspace {
+                Text("Selected · \(selectedCodexWorkspace.name)")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            LazyVGrid(columns: workspaceGridColumns, alignment: .leading, spacing: 8) {
+                ForEach(codexWorkspaces) { workspace in
+                    WorkspaceChipButton(
+                        workspace: workspace,
+                        isSelected: selectedCodexWorkspace?.id == workspace.id,
+                        threadCount: codexThreadCount(for: workspace),
+                        onSelect: {
+                            selectCodexWorkspace(workspace.id)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private func normalizeSelectedCodexWorkspace() {
+        guard selectedCodexWorkspaceID.isEmpty ||
+              codexWorkspaces.contains(where: { $0.id == selectedCodexWorkspaceID }) == false
+        else {
+            return
+        }
+        selectedCodexWorkspaceID = codexWorkspaces.first(where: \.isDefault)?.id ?? codexWorkspaces.first?.id ?? ""
+    }
+
+    private func selectCodexWorkspace(_ workspaceID: String) {
+        selectedCodexWorkspaceID = workspaceID
+        reloadCodexThreadCatalog()
+    }
+
+    private func reloadCodexThreadCatalog() {
+        codexThreadCatalog.reload(workspaces: codexWorkspaces)
+    }
+
+    private func codexThreadCount(for workspace: CodexWorkspaceDescriptor) -> Int {
+        let matchedByPath = codexThreadCatalog.entries.filter { codexEntry($0, belongsTo: workspace) }
+        if matchedByPath.isEmpty {
+            return codexThreadCatalog.entries.filter {
+                $0.workspaceName.localizedCaseInsensitiveCompare(workspace.name) == .orderedSame
+            }.count
+        }
+        return matchedByPath.count
+    }
+
+    private func codexEntry(_ entry: CodexThreadListEntry, belongsTo workspace: CodexWorkspaceDescriptor) -> Bool {
+        let entryPath = standardizedCodexPath(entry.workingDirectory)
+        let workspacePath = standardizedCodexPath(workspace.path)
+        return entryPath == workspacePath || entryPath.hasPrefix(workspacePath + "/")
+    }
+
+    private func standardizedCodexPath(_ path: String) -> String {
+        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
     }
 
     private var codexGlobalControls: some View {
@@ -479,17 +662,42 @@ struct ContentView: View {
         }
     }
 
-    private func codexSessionSubtitle(for session: CodexSessionRecord) -> String {
-        let thread = session.threadID.map { String($0.prefix(8)) } ?? "pending"
-        let responsePreview = session.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines)
-        let statusPrefix = (session.isBusy ?? false) ? "Running" : "Ready"
+    private func openCodexThread(_ entry: CodexThreadListEntry) {
+        if let recordID = entry.recordID {
+            CodexSessionManager.shared.openSavedSession(recordID: recordID)
+            return
+        }
+
+        guard let threadID = entry.threadID else {
+            return
+        }
+
+        let normalizedModel = appState.codexDefaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelOverride = normalizedModel.isEmpty ? nil : normalizedModel
+
+        CodexSessionManager.shared.openThread(
+            threadID: threadID,
+            title: entry.title,
+            workingDirectory: entry.workingDirectory,
+            executablePath: appState.codexPath,
+            modelOverride: modelOverride,
+            reasoningEffort: appState.codexReasoningEffort,
+            serviceTier: appState.codexServiceTier
+        )
+    }
+
+    private func codexSessionSubtitle(for entry: CodexThreadListEntry) -> String {
+        let thread = entry.threadID.map { String($0.prefix(8)) } ?? "pending"
+        let responsePreview = entry.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+        let statusPrefix = entry.isBusy ? "Running" : "Ready"
+        let workspacePrefix = entry.workspaceName
 
         if responsePreview.isEmpty {
-            return "\(statusPrefix) · Session \(thread) · \(session.updatedAt.formatted(date: .omitted, time: .shortened))"
+            return "\(workspacePrefix) · \(statusPrefix) · Thread \(thread) · \(entry.updatedAt.formatted(date: .omitted, time: .shortened))"
         }
 
         let compact = responsePreview.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-        return "\(statusPrefix) · Session \(thread) · \(compact.prefix(70))"
+        return "\(workspacePrefix) · \(statusPrefix) · \(compact.prefix(70))"
     }
 
     private func statsCard(title: String, value: String, subtitle: String) -> some View {

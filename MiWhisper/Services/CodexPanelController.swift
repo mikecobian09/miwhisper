@@ -136,6 +136,41 @@ final class CodexSessionStore: ObservableObject {
         sessions.first { $0.id == id }
     }
 
+    func session(threadID: String) -> CodexSessionRecord? {
+        sessions.first { $0.threadID == threadID }
+    }
+
+    func createImportedThreadSession(
+        title: String,
+        threadID: String,
+        executablePath: String,
+        workingDirectory: String,
+        modelOverride: String?,
+        reasoningEffort: CodexReasoningEffort,
+        serviceTier: CodexServiceTier,
+        activity: [CodexActivityEntry] = [],
+        latestResponse: String = "",
+        createdAt: Date = Date()
+    ) -> CodexSessionRecord {
+        let record = CodexSessionRecord(
+            id: UUID(),
+            title: title,
+            threadID: threadID,
+            executablePath: executablePath,
+            workingDirectory: workingDirectory,
+            modelOverride: modelOverride,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            isBusy: false,
+            latestResponse: latestResponse,
+            activity: sanitizedActivity(activity),
+            createdAt: createdAt,
+            updatedAt: Date()
+        )
+        upsert(record)
+        return record
+    }
+
     func updateSession(id: UUID, mutate: (inout CodexSessionRecord) -> Void) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         var record = sessions[index]
@@ -207,6 +242,11 @@ final class CodexSessionStore: ObservableObject {
         load()
     }
 
+    func deleteSession(id: UUID) {
+        sessions.removeAll { $0.id == id }
+        save()
+    }
+
     private func save() {
         guard let data = try? JSONEncoder().encode(sessions) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
@@ -262,6 +302,289 @@ private enum CodexModelCatalog {
     }
 }
 
+private struct CodexNativeThreadHistory {
+    let activity: [CodexActivityEntry]
+    let latestResponse: String
+    let createdAt: Date
+
+    static func load(threadID: String) -> CodexNativeThreadHistory? {
+        guard let fileURL = sessionFileURL(for: threadID) else { return nil }
+
+        var activity: [CodexActivityEntry] = []
+        var seenMessages: Set<String> = []
+        var latestResponse = ""
+        var createdAt: Date?
+
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+
+        let data = handle.readDataToEndOfFile()
+        guard let contents = String(data: data, encoding: .utf8) else { return nil }
+
+        for line in contents.split(whereSeparator: \.isNewline) {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                continue
+            }
+
+            let topType = object["type"] as? String
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            let payloadType = payload["type"] as? String
+            let role = payload["role"] as? String
+            let entryDate = date(from: object["timestamp"] as? String ?? payload["timestamp"] as? String)
+            createdAt = min(createdAt ?? entryDate, entryDate)
+
+            switch (topType, payloadType, role) {
+            case ("event_msg", "user_message", _):
+                guard let message = cleanedUserMessage(payload["message"] as? String),
+                      seenMessages.insert("user:\(message)").inserted
+                else {
+                    continue
+                }
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .user,
+                        blockKind: .system,
+                        title: "User",
+                        detail: CodexActivityEntry.clippedText(message, maxCharacters: 12_000),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("event_msg", "agent_reasoning", _):
+                guard let text = nonEmpty(payload["text"] as? String) else { continue }
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .assistant,
+                        blockKind: .reasoning,
+                        title: "Thinking",
+                        detail: CodexActivityEntry.clippedText(text, maxCharacters: 8_000),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("event_msg", "agent_message", _):
+                guard let message = nonEmpty(payload["message"] as? String),
+                      seenMessages.insert("assistant:\(message)").inserted
+                else {
+                    continue
+                }
+                latestResponse = message
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .assistant,
+                        blockKind: .final,
+                        title: "Codex",
+                        detail: CodexActivityEntry.clippedText(message, maxCharacters: 16_000),
+                        relatedFiles: relatedFiles(in: message),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("response_item", "message", "user"):
+                guard let message = cleanedUserMessage(contentText(from: payload)),
+                      seenMessages.insert("user:\(message)").inserted
+                else {
+                    continue
+                }
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .user,
+                        blockKind: .system,
+                        title: "User",
+                        detail: CodexActivityEntry.clippedText(message, maxCharacters: 12_000),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("response_item", "message", "assistant"):
+                guard let message = nonEmpty(contentText(from: payload)),
+                      seenMessages.insert("assistant:\(message)").inserted
+                else {
+                    continue
+                }
+                latestResponse = message
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .assistant,
+                        blockKind: .final,
+                        title: "Codex",
+                        detail: CodexActivityEntry.clippedText(message, maxCharacters: 16_000),
+                        relatedFiles: relatedFiles(in: message),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("response_item", "function_call", _), ("response_item", "custom_tool_call", _):
+                let name = payload["name"] as? String ?? "tool"
+                let arguments = payload["arguments"] as? String ?? payload["input"] as? String ?? ""
+                let command = commandText(toolName: name, arguments: arguments)
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .tool,
+                        blockKind: command == nil ? .tool : .command,
+                        title: command == nil ? "Tool Call: \(name)" : "Command",
+                        detail: CodexActivityEntry.clippedText(arguments, maxCharacters: 8_000),
+                        detailStyle: .monospaced,
+                        command: command,
+                        relatedFiles: relatedFiles(in: arguments),
+                        createdAt: entryDate
+                    )
+                )
+
+            case ("response_item", "function_call_output", _), ("response_item", "custom_tool_call_output", _):
+                guard let output = nonEmpty(payload["output"] as? String) else { continue }
+                activity.append(
+                    CodexActivityEntry(
+                        kind: .tool,
+                        blockKind: .tool,
+                        title: "Tool Output",
+                        detail: CodexActivityEntry.clippedText(output, maxCharacters: 10_000),
+                        detailStyle: .monospaced,
+                        relatedFiles: relatedFiles(in: output),
+                        createdAt: entryDate
+                    )
+                )
+
+            default:
+                continue
+            }
+        }
+
+        guard !activity.isEmpty else { return nil }
+
+        let storedActivity = Array(activity.suffix(200)).map { $0.sanitizedForStorage() }
+        return CodexNativeThreadHistory(
+            activity: storedActivity,
+            latestResponse: CodexActivityEntry.clippedText(latestResponse, maxCharacters: 48_000),
+            createdAt: createdAt ?? storedActivity.first?.createdAt ?? Date()
+        )
+    }
+
+    private static func sessionFileURL(for threadID: String) -> URL? {
+        let sessionsRootURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/sessions")
+        guard let enumerator = FileManager.default.enumerator(
+            at: sessionsRootURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var fallbackMatches: [URL] = []
+        for case let fileURL as URL in enumerator {
+            guard fileURL.pathExtension == "jsonl" else { continue }
+            if fileURL.lastPathComponent.contains(threadID) {
+                return fileURL
+            }
+            fallbackMatches.append(fileURL)
+        }
+
+        return fallbackMatches.first { containsSessionID(threadID, at: $0) }
+    }
+
+    private static func containsSessionID(_ threadID: String, at fileURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+
+        guard let data = try? handle.read(upToCount: 4096),
+              let contents = String(data: data, encoding: .utf8),
+              let firstLine = contents.split(whereSeparator: \.isNewline).first,
+              let jsonData = String(firstLine).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let payload = object["payload"] as? [String: Any],
+              let sessionID = payload["id"] as? String
+        else {
+            return false
+        }
+
+        return sessionID == threadID
+    }
+
+    private static func cleanedUserMessage(_ rawMessage: String?) -> String? {
+        guard var message = nonEmpty(rawMessage) else { return nil }
+
+        if let range = message.range(of: "## My request for Codex:") {
+            message = String(message[range.upperBound...])
+        }
+
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.hasPrefix("# AGENTS.md instructions") else { return nil }
+        guard !trimmed.hasPrefix("<environment_context>") else { return nil }
+        guard !trimmed.hasPrefix("Generate a concise UI title") else { return nil }
+        return trimmed
+    }
+
+    private static func contentText(from payload: [String: Any]) -> String? {
+        if let text = payload["text"] as? String {
+            return text
+        }
+
+        guard let content = payload["content"] as? [[String: Any]] else {
+            return nil
+        }
+
+        let parts = content.compactMap { item -> String? in
+            if let text = item["text"] as? String {
+                return text
+            }
+            return item["content"] as? String
+        }
+
+        return nonEmpty(parts.joined(separator: "\n\n"))
+    }
+
+    private static func commandText(toolName: String, arguments: String) -> String? {
+        guard toolName == "shell_command" || toolName == "exec_command" else { return nil }
+        guard let data = arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nonEmpty(arguments)
+        }
+
+        if let command = object["command"] as? String {
+            return command
+        }
+        if let cmd = object["cmd"] as? String {
+            return cmd
+        }
+        if let cmd = object["cmd"] as? [String] {
+            return cmd.joined(separator: " ")
+        }
+        return nil
+    }
+
+    private static func relatedFiles(in text: String) -> [CodexActivityFile] {
+        ActivityFileReferenceParser.paths(in: text).map { CodexActivityFile(path: $0) }
+    }
+
+    private static func nonEmpty(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func date(from rawValue: String?) -> Date {
+        guard let rawValue else { return Date() }
+        return fractionalDateFormatter.date(from: rawValue)
+            ?? plainDateFormatter.date(from: rawValue)
+            ?? Date()
+    }
+
+    private static let fractionalDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let plainDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+}
+
 @MainActor
 final class CodexSessionManager {
     static let shared = CodexSessionManager()
@@ -277,6 +600,29 @@ final class CodexSessionManager {
         reasoningEffort: CodexReasoningEffort,
         serviceTier: CodexServiceTier
     ) {
+        let sessionID = createSession(
+            prompt: prompt,
+            executablePath: executablePath,
+            workingDirectory: workingDirectory,
+            modelOverride: modelOverride,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            shouldPresentWindow: true
+        )
+        guard let model = models[sessionID] else { return }
+        model.startInitialTurn(prompt: prompt)
+    }
+
+    @discardableResult
+    func createSession(
+        prompt: String,
+        executablePath: String,
+        workingDirectory: String,
+        modelOverride: String?,
+        reasoningEffort: CodexReasoningEffort,
+        serviceTier: CodexServiceTier,
+        shouldPresentWindow: Bool
+    ) -> UUID {
         let title = CodexSessionTitleBuilder.make(for: prompt)
         let record = CodexSessionStore.shared.createSession(
             title: title,
@@ -289,15 +635,11 @@ final class CodexSessionManager {
         let model = CodexSessionViewModel(record: record)
         models[model.id] = model
 
-        let controller = CodexSessionWindowController(model: model) { [weak self] sessionID in
-            self?.controllers.removeValue(forKey: sessionID)
+        if shouldPresentWindow {
+            presentWindow(for: model)
         }
 
-        controllers[model.id] = controller
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        model.startInitialTurn(prompt: prompt)
+        return model.id
     }
 
     func openSavedSession(recordID: UUID) {
@@ -318,6 +660,88 @@ final class CodexSessionManager {
             model = newModel
         }
 
+        presentWindow(for: model)
+    }
+
+    @discardableResult
+    func openThread(
+        threadID: String,
+        title: String,
+        workingDirectory: String,
+        executablePath: String,
+        modelOverride: String?,
+        reasoningEffort: CodexReasoningEffort,
+        serviceTier: CodexServiceTier
+    ) -> UUID {
+        if let existingRecord = CodexSessionStore.shared.session(threadID: threadID) {
+            hydrateNativeThreadIfNeeded(existingRecord)
+            openSavedSession(recordID: existingRecord.id)
+            return existingRecord.id
+        }
+
+        let history = CodexNativeThreadHistory.load(threadID: threadID)
+        let record = CodexSessionStore.shared.createImportedThreadSession(
+            title: title,
+            threadID: threadID,
+            executablePath: executablePath,
+            workingDirectory: workingDirectory,
+            modelOverride: modelOverride,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            activity: history?.activity ?? [],
+            latestResponse: history?.latestResponse ?? "",
+            createdAt: history?.createdAt ?? Date()
+        )
+        let model = CodexSessionViewModel(record: record)
+        models[model.id] = model
+        presentWindow(for: model)
+        return model.id
+    }
+
+    func sessionRecord(id: UUID) -> CodexSessionRecord? {
+        CodexSessionStore.shared.session(id: id)
+    }
+
+    func hydrateSavedThreadIfNeeded(recordID: UUID) {
+        guard let record = CodexSessionStore.shared.session(id: recordID) else { return }
+        hydrateNativeThreadIfNeeded(record)
+    }
+
+    func allSessionRecords() -> [CodexSessionRecord] {
+        CodexSessionStore.shared.sessions
+    }
+
+    func send(prompt: String, to recordID: UUID) throws {
+        guard let model = model(for: recordID) else {
+            throw CodexRunnerError.missingThread
+        }
+        try model.sendPromptFromBridge(prompt)
+    }
+
+    func stop(recordID: UUID) {
+        guard let model = model(for: recordID) else { return }
+        model.stopCurrentTurn()
+    }
+
+    func focus(recordID: UUID) {
+        openSavedSession(recordID: recordID)
+    }
+
+    private func model(for recordID: UUID) -> CodexSessionViewModel? {
+        if let existingModel = models[recordID] {
+            return existingModel
+        }
+
+        guard let record = CodexSessionStore.shared.session(id: recordID) else {
+            return nil
+        }
+
+        let model = CodexSessionViewModel(record: record)
+        models[recordID] = model
+        return model
+    }
+
+    private func presentWindow(for model: CodexSessionViewModel) {
         let controller = CodexSessionWindowController(model: model) { [weak self] sessionID in
             self?.controllers.removeValue(forKey: sessionID)
         }
@@ -326,6 +750,29 @@ final class CodexSessionManager {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func hydrateNativeThreadIfNeeded(_ record: CodexSessionRecord) {
+        guard record.activity.isEmpty,
+              let threadID = record.threadID,
+              let history = CodexNativeThreadHistory.load(threadID: threadID)
+        else {
+            return
+        }
+
+        CodexSessionStore.shared.updateSession(id: record.id) { storedRecord in
+            guard storedRecord.activity.isEmpty else { return }
+            storedRecord.activity = history.activity
+            if storedRecord.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                storedRecord.latestResponse = history.latestResponse
+            }
+            storedRecord.createdAt = min(storedRecord.createdAt, history.createdAt)
+        }
+
+        models[record.id]?.hydrateHistoryIfNeeded(
+            activity: history.activity,
+            latestResponse: history.latestResponse
+        )
     }
 }
 
@@ -558,6 +1005,31 @@ final class CodexSessionViewModel: ObservableObject {
 
     func stopCurrentTurn() {
         runner.cancel()
+    }
+
+    func sendPromptFromBridge(_ prompt: String) throws {
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            throw CodexRunnerError.emptyPrompt
+        }
+        send(prompt: trimmedPrompt)
+    }
+
+    func hydrateHistoryIfNeeded(activity importedActivity: [CodexActivityEntry], latestResponse importedLatestResponse: String) {
+        guard activity.isEmpty, !importedActivity.isEmpty else { return }
+
+        activity = importedActivity
+        if latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            latestResponse = importedLatestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? Self.derivedLatestResponse(from: importedActivity)
+                : importedLatestResponse
+        }
+        trimActivity()
+        requestPersist(immediate: true)
+    }
+
+    var sessionWorkingDirectory: String {
+        workingDirectory
     }
 
     func openReader() {

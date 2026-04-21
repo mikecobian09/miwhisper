@@ -2,6 +2,16 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.6
+
+- Added the Companion browser app served from the local MiWhisper bridge.
+- Added an installable Companion PWA with workspace-aware Codex thread browsing, session continuation, stop/focus controls, and browser voice prompts.
+- Added a local Companion HTTP API for health, bootstrap, workspaces, sessions, voice transcription, file search, raw file reads, and rendered previews.
+- Added native Codex thread catalog hydration so existing Codex threads can appear alongside MiWhisper-managed sessions.
+- Improved Codex activity rendering with clearer final answers, collapsible reasoning/tool output, Markdown body rendering, and local file preview links.
+- Tightened public safety defaults: Companion is loopback-only, public builds do not auto-configure Tailscale Serve, and a local workspace path heuristic was removed.
+- Rewrote the README around public installation, Companion, the API, PWA setup, privacy limits, and remote-access guidance.
+
 ## v0.1.0-alpha.5
 
 - Added a new `Stats` section to the menu bar contextual panel.

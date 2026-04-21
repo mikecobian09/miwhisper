@@ -22,6 +22,8 @@
 		A0000000000000000000010C /* CodexRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000210 /* CodexRunner.swift */; };
 		A0000000000000000000010D /* CodexPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000211 /* CodexPanelController.swift */; };
 		A0000000000000000000010E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000212 /* Assets.xcassets */; };
+		A0000000000000000000010F /* CompanionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000213 /* CompanionBridge.swift */; };
+		A00000000000000000000110 /* CodexThreadCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000214 /* CodexThreadCatalog.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +46,8 @@
 		A00000000000000000000210 /* CodexRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexRunner.swift; sourceTree = "<group>"; };
 		A00000000000000000000211 /* CodexPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexPanelController.swift; sourceTree = "<group>"; };
 		A00000000000000000000212 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A00000000000000000000213 /* CompanionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionBridge.swift; sourceTree = "<group>"; };
+		A00000000000000000000214 /* CodexThreadCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexThreadCatalog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +105,8 @@
 				A0000000000000000000020F /* WhisperBridge.mm */,
 				A00000000000000000000210 /* CodexRunner.swift */,
 				A00000000000000000000211 /* CodexPanelController.swift */,
+				A00000000000000000000213 /* CompanionBridge.swift */,
+				A00000000000000000000214 /* CodexThreadCatalog.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -197,6 +203,8 @@
 				A0000000000000000000010B /* WhisperBridge.mm in Sources */,
 				A0000000000000000000010C /* CodexRunner.swift in Sources */,
 				A0000000000000000000010D /* CodexPanelController.swift in Sources */,
+				A0000000000000000000010F /* CompanionBridge.swift in Sources */,
+				A00000000000000000000110 /* CodexThreadCatalog.swift in Sources */,
 			);
 				runOnlyForDeploymentPostprocessing = 0;
 			};

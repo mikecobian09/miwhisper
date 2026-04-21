@@ -4,79 +4,78 @@
 [![License](https://img.shields.io/github/license/mikecobian09/miwhisper)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-black)](#requirements)
 
-MiWhisper is a macOS menu bar app for fast local dictation with an optional voice-to-Codex bridge.
+MiWhisper is a macOS menu bar app for local push-to-talk dictation, voice-driven Codex sessions, and a localhost Companion web app you can use from a browser or install as a PWA.
 
-Hold `Fn` to record, release to transcribe locally with `whisper.cpp`, and paste into the active app. Hold `Command + Fn` to transcribe your speech as a literal prompt and open a live Codex session window you can continue from the keyboard or by voice.
+Hold `Fn` to dictate into the focused app. Hold `Command + Fn` to turn your voice into a Codex prompt. Open the Companion at `http://127.0.0.1:6009` to manage Codex threads, continue sessions, preview generated files, and record prompts from a browser.
 
-> Status: early alpha, but already useful. The dictation path is local-first. The Codex path is intentionally optimized for a trusted development machine, not for a sandboxed multi-user environment.
+> Status: early alpha. The dictation path is local-first. The Codex and Companion paths are for trusted developer machines and should be treated as powerful local automation surfaces.
 
-## Why this exists
+## What You Get
 
-MiWhisper is built around a narrow goal: make voice useful during real development work without forcing everything through a cloud dictation product.
+- Native macOS menu bar utility.
+- Local transcription with bundled `whisper.cpp`.
+- Push-to-talk dictation with `Fn`.
+- Voice-to-Codex prompts with `Command + Fn`.
+- Persistent Codex sessions with running state, history, stop/focus controls, and thread resume.
+- Workspace-aware Codex thread catalog from local Codex state.
+- Companion web app served from the Mac on `127.0.0.1:6009`.
+- Installable PWA for the Companion UI.
+- Companion HTTP API for sessions, voice transcription, file search, raw file reads, and rendered previews.
+- Markdown and HTML rendering for Codex responses and generated files.
+- Usage stats with daily persisted buckets and saved-time estimates.
+- Optional launch-at-login setting.
 
-The core design choices are:
+## Safety Model
 
-- Native macOS app, menu bar first.
-- Local transcription with embedded `whisper.cpp`.
-- Push-to-talk instead of always-on listening.
-- Low-friction paste into the current app.
-- Optional Codex bridge for developer workflows.
+MiWhisper is designed to be useful without quietly taking over a machine.
 
-## What It Does
+Public release defaults:
 
-- Local push-to-talk dictation with `Fn`.
-- Optional `Command + Fn` bridge to Codex.
-- Optional launch-at-login behavior for a proper menu bar utility workflow.
-- Embedded `whisper.cpp` runtime with Metal acceleration on Apple Silicon.
-- Per-model presets and download helpers.
-- Clipboard-safe paste fallback when direct insertion fails.
-- Persistent Codex session windows with history and resume support.
-- Rendered HTML and Markdown outputs for Codex responses and generated files.
-- Reader windows for generated `.html`, `.htm`, `.md`, and `.markdown` files.
+- The Companion server starts on loopback only: `127.0.0.1:6009`.
+- MiWhisper does not configure Tailscale Serve automatically.
+- File preview and raw file APIs are restricted to discovered workspaces plus `~/Downloads/MiWhisper`.
+- Dictation audio is transcribed locally with `whisper.cpp`.
+- Browser-uploaded Companion audio is normalized locally and then transcribed locally.
 
-## What It Does Not Try To Be
+Important limits:
 
-- A packaged consumer app with polished onboarding.
-- A sandboxed Codex client.
-- A streaming partial-transcription product.
-- A secure multi-tenant assistant.
+- Codex mode is not a sandbox. It can run whatever your local Codex installation is allowed to run.
+- Companion has no login screen. Treat it as local-only unless you deliberately expose it through a trusted private network.
+- If you expose Companion with Tailscale Serve, anyone with access to that tailnet endpoint may be able to control MiWhisper's Companion API.
+- Release builds are currently unsigned and not notarized.
 
-If you want a hardened product, this repo is not there yet. If you want a transparent developer tool you can inspect and change, it is.
+This is not a multi-user server, a hardened remote admin panel, or a consumer-grade signed app yet.
 
 ## Requirements
 
 - macOS 14 or later.
 - Apple Silicon strongly recommended.
-- Xcode 15 or later.
-- `cmake` available in `PATH`.
+- Xcode 15 or later if building from source.
+- `cmake` available in `PATH` if building bundled `whisper.cpp`.
 - Microphone permission.
-- Accessibility permission for paste-at-cursor.
+- Accessibility permission for inserting text into the focused app.
 - Input Monitoring permission for reliable `Fn` capture.
 
-Optional for Codex mode:
+Optional:
 
-- Codex installed locally. The current default path is `/Applications/Codex.app/Contents/Resources/codex`.
+- Codex installed locally for voice-to-Codex and Companion session workflows.
+- Tailscale if you intentionally want to expose the Companion PWA to your own tailnet.
 
-## Quick Start
-
-If you just want to try MiWhisper, install the latest release zip.
-
-If you want the smoothest setup, ask your coding agent to do it and point it at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md).
-
-### Install From a Release
+## Install From a Release
 
 1. Download the latest macOS arm64 zip from [Releases](https://github.com/mikecobian09/miwhisper/releases).
 2. Unzip `MiWhisper.app`.
 3. Move it to `/Applications`.
-4. Launch it and approve the required macOS permissions.
+4. Launch it.
+5. Approve Microphone, Accessibility, and Input Monitoring when macOS asks.
 
-Current releases are unsigned and not notarized yet, so macOS Gatekeeper may require an extra confirmation step.
+Because current releases are unsigned and not notarized, macOS Gatekeeper may require an additional confirmation before the first launch.
 
-### Build From Source
+## Build From Source
 
-For most users, the easiest source install path is still to ask their coding agent to do it. Point the agent at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) and let it run the setup and validation flow, then approve the required macOS permissions when prompted.
+The source install path is still developer-oriented. If you are using a coding agent, point it at [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md).
 
-1. Build the bundled `whisper.cpp` dependencies and download the default model:
+1. Bootstrap `whisper.cpp` and the default model:
 
 ```bash
 ./scripts/bootstrap-whispercpp.sh
@@ -86,67 +85,122 @@ For most users, the easiest source install path is still to ask their coding age
 
 3. Run the `MiWhisper` target.
 
-4. Grant permissions when macOS asks for them.
+4. Grant the required macOS permissions.
 
-5. Hold `Fn`, speak, release, and verify that the transcript pastes into the active app.
+5. Hold `Fn`, speak, release, and verify that the transcript appears in the active app.
 
-## Project Docs
-
-- [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) for Codex, ChatGPT, Claude, or other agents installing the app.
-- [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, testing, and pull request expectations.
-- [SECURITY.md](./SECURITY.md) for responsible reporting guidance.
-- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for community expectations.
-- [CHANGELOG.md](./CHANGELOG.md) for public release history.
-
-## Installation Notes
-
-`bootstrap-whispercpp.sh` will:
-
-- clone `whisper.cpp` into `vendors/whisper.cpp` if needed;
-- build static libraries with Metal enabled;
-- download the default `small` model into `models/ggml-small.bin`.
-
-On Apple Silicon, the bootstrap script refuses to continue with an x86_64-only `cmake` unless you explicitly override it. That is deliberate. A translated toolchain gives misleading latency numbers.
-
-If you need to force a translated build anyway:
-
-```bash
-ALLOW_TRANSLATED_CMAKE=1 ./scripts/bootstrap-whispercpp.sh
-```
-
-If your ARM `cmake` is installed in Homebrew’s default location:
+If your ARM Homebrew `cmake` is not first in `PATH`, run:
 
 ```bash
 CMAKE_BIN=/opt/homebrew/bin/cmake ./scripts/bootstrap-whispercpp.sh
 ```
 
-## Usage
+The bootstrap script intentionally refuses x86_64-only `cmake` on Apple Silicon unless you opt in:
 
-### Shortcuts
+```bash
+ALLOW_TRANSLATED_CMAKE=1 ./scripts/bootstrap-whispercpp.sh
+```
 
-| Shortcut | Action |
-| --- | --- |
-| `Fn` | Record dictation and paste the transcript on release |
-| `Command + Fn` | Record a literal prompt and open a Codex session on release |
+## Core Workflow
 
-### Dictation Flow
+### Dictation
 
 1. Hold `Fn`.
 2. Speak.
 3. Release `Fn`.
 4. MiWhisper transcribes locally.
-5. The result is inserted into the current target, or copied to the clipboard if direct insertion fails.
+5. The transcript is inserted into the focused app, with clipboard fallback if direct insertion fails.
 
-### Codex Flow
+### Codex
 
 1. Hold `Command + Fn`.
-2. Speak your prompt.
+2. Speak the prompt exactly as you want Codex to receive it.
 3. Release the keys.
 4. MiWhisper transcribes locally.
-5. A new Codex window opens for that prompt.
-6. Continue the same session from the composer at the bottom of the window.
+5. A Codex session opens with the prompt.
+6. Continue, stop, focus, or reopen the session from MiWhisper.
 
-Each Codex request opens its own session window. Closing the window does not kill the session while MiWhisper remains open; you can reopen it from the menu bar history.
+Codex sessions are persisted locally. MiWhisper can also hydrate native Codex thread history so old threads show useful context instead of empty records.
+
+## Companion
+
+Companion is the built-in browser UI served by MiWhisper.
+
+Open:
+
+```text
+http://127.0.0.1:6009
+```
+
+Use it to:
+
+- browse detected Codex workspaces;
+- see native and MiWhisper-imported Codex threads in one catalog;
+- open native Codex threads on demand;
+- continue a session from the browser;
+- stop or focus a running session;
+- record voice prompts from the browser;
+- search workspace files;
+- preview generated HTML, Markdown, images, PDFs, text, logs, diffs, and patches.
+
+The PWA can be installed from the browser's install/share menu. On iPhone or iPad, microphone capture requires a secure context, so plain `http://127.0.0.1` is only useful on the Mac itself.
+
+## Remote PWA With Tailscale
+
+MiWhisper no longer configures Tailscale Serve automatically in public builds. That is deliberate: `tailscale serve --bg --yes 6009` can overwrite an existing root Serve configuration.
+
+If you understand the risk and want the Companion PWA on your private tailnet, run this yourself:
+
+```bash
+tailscale serve --bg --yes 6009
+```
+
+Then open the HTTPS tailnet URL that Tailscale prints. Keep in mind that the Companion API can continue Codex sessions and read allowed workspace files, so only expose it on a network you trust.
+
+To inspect or remove your Tailscale Serve configuration:
+
+```bash
+tailscale serve status
+tailscale serve reset
+```
+
+## Companion API
+
+The API is local and intentionally small. Responses are JSON unless noted.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Basic health check |
+| `GET` | `/api/bootstrap` | App name, local URL, workspaces, and session summaries |
+| `GET` | `/api/workspaces` | Detected workspaces |
+| `GET` | `/api/sessions` | Unified Codex thread/session list |
+| `POST` | `/api/sessions` | Create a new Codex session from a prompt |
+| `POST` | `/api/sessions/open-thread` | Import/open a native Codex thread |
+| `GET` | `/api/sessions/{id}` | Session detail and activity |
+| `POST` | `/api/sessions/{id}/messages` | Continue a session |
+| `POST` | `/api/sessions/{id}/stop` | Stop a running session |
+| `POST` | `/api/sessions/{id}/focus` | Focus the native session window |
+| `GET` | `/api/sessions/{id}/stream` | Server-sent session updates |
+| `PATCH` | `/api/sessions/{id}` | Rename a local session |
+| `DELETE` | `/api/sessions/{id}` | Delete a non-running local session |
+| `POST` | `/api/voice/transcribe` | Upload browser audio for local transcription |
+| `GET` | `/api/workspaces/{id}/files?q=...` | Search allowed workspace files |
+| `GET` | `/api/files/raw?path=...` | Read an allowed file |
+| `GET` | `/preview?path=...` | Render or redirect an allowed preview |
+
+Example:
+
+```bash
+curl http://127.0.0.1:6009/api/health
+```
+
+Create a session:
+
+```bash
+curl -X POST http://127.0.0.1:6009/api/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Summarize the current repository structure."}'
+```
 
 ## Settings
 
@@ -156,65 +210,37 @@ Current settings include:
 - Whisper model selection.
 - Model downloads for bundled presets.
 - Transcription language.
-- Literal transcription vs. translation to English.
+- Literal transcription or translation to English.
 - Codex executable path.
 - Default Codex model.
 - Default Codex reasoning effort.
-- Default Codex service tier / speed.
+- Default Codex service tier.
 
-If you clone the repo into a different location, review the default paths in Settings on first run. The current codebase still carries developer-oriented defaults.
+The default Codex executable path is:
+
+```text
+/Applications/Codex.app/Contents/Resources/codex
+```
 
 ## Permissions
 
-MiWhisper depends on normal macOS privacy controls:
-
-| Permission | Why it is needed |
+| Permission | Why MiWhisper Needs It |
 | --- | --- |
-| Microphone | Record audio for dictation |
+| Microphone | Record dictation and Companion voice prompts |
 | Accessibility | Insert text into the focused app |
 | Input Monitoring | Detect the `Fn` hotkey reliably |
 
-If `Fn` does not work but the app is otherwise healthy, the usual cause is macOS intercepting the Globe/Fn key for emoji, dictation, or another system action.
-
-## Privacy and Safety
-
-The privacy model is split:
-
-- Dictation mode is local-first. Audio is recorded locally and transcribed locally with `whisper.cpp`.
-- Codex mode is not local-only. Audio is still transcribed locally, but the resulting prompt is sent to your local Codex setup.
-
-Important:
-
-- Codex sessions in this project are intentionally launched with dangerous full-access mode enabled.
-- That is acceptable for the author’s trusted personal workflow, but it is not a safe default for an untrusted environment.
-- If you publish or share this tool widely, users should understand that Codex mode can inspect local workspaces and act with broad filesystem access.
-
-## Codex Session UX
-
-The Codex bridge is more than “paste a prompt into a CLI.”
-
-Current behavior includes:
-
-- One window per request.
-- Resume-able session history.
-- Live activity stream grouped into typed blocks such as reasoning, command, tool, patch, and final response.
-- Stop and steer controls during active work.
-- Rendered Markdown and HTML responses.
-- Rendered opening of generated `.html` and `.md` files.
-- Context menus for files with open, reveal in Finder, and copy-path actions.
-
-External artifacts generated by Codex sessions are intended to live in `~/Downloads/MiWhisper/` unless they are actual project files that belong in the repo being edited.
+If `Fn` does nothing, check Input Monitoring and macOS Globe/Fn keyboard settings first.
 
 ## Models
 
-The app currently ships with a few practical presets rather than pretending every Whisper model is equally usable for live dictation.
+The app includes practical model presets rather than treating every Whisper model as equally useful for live dictation.
 
-Useful starting points:
+Good starting points:
 
 - `small`: fastest reasonable default.
-- `large-v3-turbo-q5_0`: stronger quality candidate without the worst memory cost.
-- `medium`: available when you want to compare quality trade-offs.
-- `Translate to English` is supported, but in practice `small` and `medium` are the safest presets for that mode today. Treat `large-v3-turbo-q5_0` as best-effort until this app has more validation across machines.
+- `medium`: useful quality comparison point.
+- `large-v3-turbo-q5_0`: stronger quality candidate with a larger footprint.
 
 Helpful scripts:
 
@@ -227,70 +253,74 @@ Helpful scripts:
 
 ## Troubleshooting
 
-### `Fn` does nothing
+### `Fn` Does Nothing
 
-- Check Input Monitoring permission.
-- Check whether macOS is using Globe/Fn for emoji or another system shortcut.
-- Reopen the app after granting permissions.
+- Confirm Input Monitoring permission.
+- Check whether macOS is using Globe/Fn for emoji, dictation, or another system action.
+- Quit and reopen MiWhisper after changing permissions.
 
-### Paste fails
+### Paste Fails
 
-- Check Accessibility permission.
-- MiWhisper will still copy the transcript to the clipboard as fallback.
+- Confirm Accessibility permission.
+- MiWhisper should still copy the transcript to the clipboard as fallback.
 
-### Codex does not launch
+### Codex Does Not Launch
 
 - Verify the Codex executable path in Settings.
-- Confirm Codex works outside the app first.
+- Confirm Codex works in Terminal first.
+- Check that the target workspace exists and is readable.
 
-### Generated HTML opens blank
+### Companion Does Not Open
 
-- Open the actual generated file from the session file actions instead of pasting raw HTML into the reader.
-- File-backed HTML now loads with local read access and JavaScript enabled in the in-app reader.
-- Very heavy or browser-specific pages may still look better in Safari or Chrome than in the embedded reader.
+- Confirm MiWhisper is running.
+- Open `http://127.0.0.1:6009/api/health`.
+- If another app uses port `6009`, quit that app or restart MiWhisper after freeing the port.
 
-### Rendered Markdown looks wrong
+### Mobile Microphone Does Not Work
 
-- Open the generated `.md` file directly from the session file actions.
-- If the content is very HTML-heavy, MiWhisper may render it better as HTML than as Markdown.
+- iOS and iPadOS require HTTPS for browser microphone capture outside localhost.
+- Use a trusted HTTPS path such as Tailscale Serve if you intentionally expose Companion.
+- Reload the PWA after changing the Serve setup.
+
+### Generated HTML Opens Blank
+
+- Open the actual generated file from the session file actions.
+- Very heavy or browser-specific pages may still work better in Safari or Chrome than in the embedded reader.
 
 ## Architecture
 
-At a high level:
+High-level pieces:
 
 - `AudioRecorder` records mono PCM audio.
 - `WhisperTranscriber` runs local transcription through the embedded `whisper.cpp` bridge.
-- `AccessibilityTextInsertion` and in-app text insertion handle paste targets.
+- `AccessibilityTextInsertion` handles focused-app insertion and clipboard fallback.
 - `HotkeyMonitor` captures `Fn` and `Command + Fn`.
-- `CodexRunner` and `CodexPanelController` drive the Codex bridge, session history, activity timeline, and readers.
+- `CodexRunner` launches and streams Codex sessions.
+- `CodexPanelController` renders native Codex session windows and generated outputs.
+- `CodexThreadCatalog` merges native Codex state with MiWhisper's local session records.
+- `CompanionBridge` serves the localhost API, PWA, file previews, and browser voice upload flow.
 
-## Project Status
+## Project Docs
 
-MiWhisper is useful, but still opinionated and rough in places.
-
-Known realities:
-
-- It is currently optimized for Apple Silicon development setups.
-- Some defaults are still more developer-oriented than end-user-oriented.
-- Codex mode is intentionally unsandboxed.
-- Downloadable release zips exist, but they are not yet signed or notarized.
-
-That said, the core workflow already works well enough to justify open sourcing it.
+- [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) for agent-assisted installation and validation.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, testing, and pull request expectations.
+- [SECURITY.md](./SECURITY.md) for responsible reporting guidance.
+- [CHANGELOG.md](./CHANGELOG.md) for release history.
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for community expectations.
 
 ## Contributing
 
 Issues and pull requests are welcome.
 
-High-value contribution areas right now:
+High-value areas:
 
-- onboarding cleanup for non-author machines;
-- packaging, signing, and notarization;
-- better permission diagnostics and recovery paths;
-- safer optional Codex modes;
-- UI polish around session history, diffs, and activity blocks.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
+- signing and notarization;
+- safer optional Codex execution modes;
+- stronger Companion authentication for remote use;
+- clearer first-run onboarding;
+- permission diagnostics and recovery;
+- UI polish for session history, diffs, previews, and activity blocks.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](./LICENSE).
+MiWhisper is released under the MIT License. See [LICENSE](./LICENSE).

@@ -2,9 +2,12 @@
 
 MiWhisper is an early alpha developer tool. The dictation path is local-first, but Codex mode is intentionally unsandboxed and designed for trusted local machines.
 
+The Companion web app and HTTP API are intended to run on loopback only by default. If a user deliberately exposes Companion through Tailscale Serve or another reverse proxy, that endpoint should be treated as a powerful local automation interface, not as a public web service.
+
 That means security reports are useful and expected, especially around:
 
 - filesystem access;
+- Companion API exposure, authentication gaps, or path traversal;
 - prompt injection through generated content;
 - arbitrary command execution surfaces;
 - privacy leaks in logs, history, or rendered files;

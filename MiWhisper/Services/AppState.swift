@@ -886,6 +886,12 @@ final class AppState: ObservableObject {
         "/Applications/Codex.app/Contents/Resources/codex"
     }
 
+    var companionArtifactRoot: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads/MiWhisper")
+            .path
+    }
+
     private static func detectWorkspaceRoot() -> String {
         let fileManager = FileManager.default
         let bundleURL = Bundle.main.bundleURL.standardizedFileURL
@@ -896,6 +902,17 @@ final class AppState: ObservableObject {
                 .deletingLastPathComponent()
                 .deletingLastPathComponent(),
             URL(fileURLWithPath: fileManager.currentDirectoryPath),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Developer")
+                .appendingPathComponent("miwhisper"),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Projects")
+                .appendingPathComponent("miwhisper"),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Code")
+                .appendingPathComponent("miwhisper"),
+            fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("miwhisper"),
         ]
 
         for candidate in candidateRoots {
@@ -1144,6 +1161,25 @@ final class AppState: ObservableObject {
 
     func path(for preset: WhisperModelPreset) -> String {
         workspaceRoot + "/models/" + preset.filename
+    }
+
+    func transcribeUploadedAudioFile(at audioFileURL: URL) async throws -> String {
+        let transcript = try await transcriber.transcribe(
+            audioFileURL: audioFileURL,
+            cliPath: cliPath,
+            modelPath: modelPath,
+            language: language,
+            mode: transcriptionMode
+        )
+
+        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranscript.isEmpty else {
+            throw WhisperError.emptyTranscript
+        }
+
+        lastTranscript = trimmedTranscript
+        rememberTranscript(trimmedTranscript)
+        return trimmedTranscript
     }
 
     func isModelInstalled(_ preset: WhisperModelPreset) -> Bool {
