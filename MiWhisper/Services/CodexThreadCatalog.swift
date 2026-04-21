@@ -7,6 +7,28 @@ struct CodexWorkspaceDescriptor: Identifiable, Hashable {
     let isDefault: Bool
 }
 
+enum CodexWorkspaceSelection {
+    static let selectedWorkspaceIDKey = "miwhisper.codex.selectedWorkspaceID"
+
+    static func selectedWorkspace(
+        defaultRoot: String,
+        userDefaults: UserDefaults = .standard
+    ) -> CodexWorkspaceDescriptor? {
+        let workspaces = CodexWorkspaceCatalog.availableWorkspaces(defaultRoot: defaultRoot)
+        let selectedID = userDefaults
+            .string(forKey: selectedWorkspaceIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let selectedID,
+           selectedID.isEmpty == false,
+           let workspace = workspaces.first(where: { $0.id == selectedID }) {
+            return workspace
+        }
+
+        return workspaces.first(where: \.isDefault) ?? workspaces.first
+    }
+}
+
 enum CodexWorkspaceCatalog {
     static func availableWorkspaces(defaultRoot: String) -> [CodexWorkspaceDescriptor] {
         let defaultPath = standardizedPath(defaultRoot)

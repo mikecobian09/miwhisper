@@ -91,12 +91,10 @@ private struct WorkspaceChipButton: View {
 }
 
 struct ContentView: View {
-    private static let selectedCodexWorkspaceIDKey = "miwhisper.codex.selectedWorkspaceID"
-
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var codexSessionStore = CodexSessionStore.shared
     @ObservedObject private var codexThreadCatalog = CodexThreadCatalog.shared
-    @AppStorage(Self.selectedCodexWorkspaceIDKey) private var selectedCodexWorkspaceID = ""
+    @AppStorage(CodexWorkspaceSelection.selectedWorkspaceIDKey) private var selectedCodexWorkspaceID = ""
     @State private var selectedStatsPeriod: UsageStatsPeriod = .week
 
     private var contextualPanelMaxHeight: CGFloat {

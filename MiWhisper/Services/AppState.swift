@@ -1423,12 +1423,15 @@ final class AppState: ObservableObject {
             return
         }
 
+        let selectedWorkspace = CodexWorkspaceSelection.selectedWorkspace(defaultRoot: workspaceRoot)
+        let workingDirectory = selectedWorkspace?.path ?? workspaceRoot
+
         statusMessage = "Opening Codex session..."
         Task { @MainActor in
             CodexSessionManager.shared.openSession(
                 prompt: normalizedPrompt,
                 executablePath: codexPath,
-                workingDirectory: workspaceRoot,
+                workingDirectory: workingDirectory,
                 modelOverride: codexDefaultModel.trimmingCharacters(in: .whitespacesAndNewlines),
                 reasoningEffort: codexReasoningEffort,
                 serviceTier: codexServiceTier

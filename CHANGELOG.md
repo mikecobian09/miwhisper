@@ -2,6 +2,10 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.7
+
+- Fixed new desktop Codex voice sessions so they start in the currently selected workspace instead of always using MiWhisper's default workspace.
+
 ## v0.1.0-alpha.6
 
 - Added the Companion browser app served from the local MiWhisper bridge.
