@@ -2,6 +2,10 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.10
+
+- Fixed Companion PWA voice transcription by accepting 16 kHz mono 16-bit WAV files written with the WAVE_FORMAT_EXTENSIBLE PCM container.
+
 ## v0.1.0-alpha.9
 
 - Fixed the Companion PWA local bridge startup on macOS by binding the loopback endpoint without passing the same port twice to Network.framework.

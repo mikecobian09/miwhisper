@@ -90,7 +90,8 @@ bool loadPCMFromWav(NSString * path, std::vector<float> & samples, NSError ** er
         offset = nextOffset;
     }
 
-    if (audioFormat != 1 || channels != 1 || sampleRate != WHISPER_SAMPLE_RATE || bitsPerSample != 16) {
+    const bool pcmContainer = audioFormat == 1 || audioFormat == 65534;
+    if (!pcmContainer || channels != 1 || sampleRate != WHISPER_SAMPLE_RATE || bitsPerSample != 16) {
         NSLog(
             @"[MiWhisper][WhisperBridge] unexpected WAV format path=%@ audioFormat=%u channels=%u sampleRate=%u bitsPerSample=%u",
             path,
