@@ -2,6 +2,10 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.9
+
+- Fixed the Companion PWA local bridge startup on macOS by binding the loopback endpoint without passing the same port twice to Network.framework.
+
 ## v0.1.0-alpha.8
 
 - Fixed installed-app workspace discovery so Codex threads are grouped by their real workspaces instead of collapsing all home-directory threads into one workspace.

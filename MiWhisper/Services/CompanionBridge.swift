@@ -1277,11 +1277,9 @@ final class CompanionHTTPServer {
     func start() throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        parameters.requiredLocalEndpoint = .hostPort(
-            host: .ipv4(IPv4Address.loopback),
-            port: NWEndpoint.Port(rawValue: port)!
-        )
-        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+        let endpointPort = NWEndpoint.Port(rawValue: port)!
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: endpointPort)
+        let listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
             let identifier = UUID()
