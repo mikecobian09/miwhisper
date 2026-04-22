@@ -2,6 +2,11 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.11
+
+- Restored and strengthened the Companion PWA voice transcription progress indicator while audio is prepared, uploaded, and transcribed.
+- Bumped the Companion PWA service worker cache so installed browser apps refresh the fixed voice UI.
+
 ## v0.1.0-alpha.10
 
 - Fixed Companion PWA voice transcription by accepting 16 kHz mono 16-bit WAV files written with the WAVE_FORMAT_EXTENSIBLE PCM container.

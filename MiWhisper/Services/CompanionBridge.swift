@@ -1988,6 +1988,10 @@ enum CompanionPWA {
                 </div>
               </div>
             </div>
+            <div class="voice-processing" id="voice-processing" hidden role="status" aria-live="polite">
+              <span class="voice-processing-spinner" aria-hidden="true"></span>
+              <span id="voice-processing-text">Subiendo audio...</span>
+            </div>
             <div class="composer" id="composer-shell">
               <button class="mic-button" id="voice-button" type="button" aria-label="Grabar voz" title="Mantén pulsado para grabar">
                 <svg class="mic-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
@@ -3414,6 +3418,44 @@ enum CompanionPWA {
     .voice-overlay[data-cancel="true"] .voice-overlay-panel { border-color: var(--warning); }
     .voice-overlay[data-cancel="true"] .voice-hint { color: var(--warning); }
 
+    .voice-processing {
+      width: min(940px, 100%);
+      max-width: 940px;
+      margin: 0 auto 6px;
+      padding: 7px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 28px;
+      background: var(--surface);
+      border: 1px solid var(--accent-soft);
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+      color: var(--accent-strong);
+      font-size: 0.74rem;
+      font-weight: 600;
+      animation: pop-in 140ms ease-out;
+    }
+    .voice-processing[hidden] { display: none; }
+    .voice-processing-spinner {
+      width: 15px;
+      height: 15px;
+      border-radius: 999px;
+      border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+      border-top-color: var(--accent);
+      animation: voice-processing-spin 760ms linear infinite;
+      flex: 0 0 auto;
+    }
+    .mic-button[data-processing="true"] {
+      opacity: 0.62;
+      cursor: wait;
+      pointer-events: none;
+    }
+    @keyframes voice-processing-spin {
+      to { transform: rotate(360deg); }
+    }
+
     /* Command palette */
     .palette {
       position: fixed;
@@ -3752,6 +3794,8 @@ enum CompanionPWA {
       pcmInputSampleRate: 0,
       recordedMimeType: "",
       recordedExtension: "m4a",
+      voiceProcessing: false,
+      voiceProcessingTimer: null,
       sseController: null,
       sseActiveSessionId: null,
       pollingHandle: null,
@@ -3842,6 +3886,7 @@ enum CompanionPWA {
         "scroll-bottom", "scroll-bottom-badge", "composer", "composer-shell",
         "composer-hint", "voice-button", "send-button", "mic-timer",
         "voice-overlay", "voice-canvas", "voice-timer", "voice-hint",
+        "voice-processing", "voice-processing-text",
         "suggestion-popup", "suggestion-header", "suggestion-list",
         "command-palette", "palette-input", "palette-results",
         "toast-stack", "composer-dock",
@@ -5621,12 +5666,14 @@ enum CompanionPWA {
     }
 
     async function toggleRecording() {
+      if (state.voiceProcessing) return;
       if (state.recording) { stopRecording({ cancel: false }); return; }
       startRecording();
     }
 
     async function startRecording() {
       if (state.recording) return;
+      if (state.voiceProcessing) return;
       if (!navigator.mediaDevices?.getUserMedia) {
         toast("Este navegador no expone micrófono. Abre la PWA por HTTPS de Tailscale, no por http://IP:6009.", "error", 6200);
         return;
@@ -5713,7 +5760,12 @@ enum CompanionPWA {
     }
 
     async function uploadVoiceBlob(blob, extension, mimeType) {
+      setVoiceProcessing(true, "Subiendo audio...");
       try {
+        await waitForPaint();
+        state.voiceProcessingTimer = setTimeout(() => {
+          setVoiceProcessing(true, "Transcribiendo audio...");
+        }, 900);
         const transcript = await api(`/api/voice/transcribe?ext=${encodeURIComponent(extension)}`, {
           method: "POST",
           body: blob,
@@ -5730,6 +5782,33 @@ enum CompanionPWA {
         vibrate([10, 40, 10]);
       } catch (err) {
         toast(err.message || "Error al transcribir", "error");
+      } finally {
+        setVoiceProcessing(false);
+      }
+    }
+
+    function waitForPaint() {
+      return new Promise((resolve) => {
+        if (typeof requestAnimationFrame !== "function") {
+          setTimeout(resolve, 0);
+          return;
+        }
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+    }
+
+    function setVoiceProcessing(active, message = "Subiendo audio...") {
+      state.voiceProcessing = active;
+      if (state.voiceProcessingTimer) {
+        clearTimeout(state.voiceProcessingTimer);
+        state.voiceProcessingTimer = null;
+      }
+      els.voiceProcessing.hidden = !active;
+      els.voiceButton.disabled = active;
+      els.voiceButton.dataset.processing = active ? "true" : "false";
+      els.composerShell.setAttribute("aria-busy", active ? "true" : "false");
+      if (active) {
+        els.voiceProcessingText.textContent = message;
       }
     }
 
@@ -5746,6 +5825,8 @@ enum CompanionPWA {
         return;
       }
       if (!chunks.length) return;
+      setVoiceProcessing(true, "Preparando audio...");
+      await waitForPaint();
       const blob = new Blob(chunks, { type: state.recordedMimeType });
       await uploadVoiceBlob(blob, state.recordedExtension, state.recordedMimeType);
     }
@@ -5764,6 +5845,8 @@ enum CompanionPWA {
         return;
       }
       if (!chunks.length) return;
+      setVoiceProcessing(true, "Preparando audio...");
+      await waitForPaint();
       const blob = encodeWav(chunks, sampleRate, 16000);
       await uploadVoiceBlob(blob, "wav", "audio/wav");
     }
@@ -6195,7 +6278,7 @@ enum CompanionPWA {
     """#
 
     static let serviceWorkerJavaScript = #"""
-    const CACHE = "miwhisper-companion-v9";
+    const CACHE = "miwhisper-companion-v11";
     const ASSETS = ["/", "/app.css", "/app.js", "/manifest.webmanifest", "/app-icon.png"];
 
     self.addEventListener("install", (event) => {
