@@ -2,6 +2,11 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.13
+
+- Added `gpt-5.5` to the selectable Codex model presets.
+- Rebuilt release dependencies with compiler prefix mapping so public app binaries do not retain local workspace paths.
+
 ## v0.1.0-alpha.12
 
 - Improved Companion PWA Markdown rendering for pipe tables, including alignment rows, escaped pipes, and pipes inside inline code.

@@ -838,6 +838,7 @@ final class AppState: ObservableObject {
     var codexModelOptions: [CodexModelOption] {
         var options = [
             CodexModelOption(id: "", title: "Config default"),
+            CodexModelOption(id: "gpt-5.5"),
             CodexModelOption(id: "gpt-5.4"),
             CodexModelOption(id: "gpt-5.4-mini"),
             CodexModelOption(id: "gpt-5.3-codex"),
