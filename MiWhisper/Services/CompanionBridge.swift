@@ -1074,9 +1074,14 @@ enum CompanionMarkdownRenderer {
                 --border: rgba(148, 163, 184, 0.2);
               }
             }
+            * { box-sizing: border-box; }
+            html, body {
+              max-width: 100%;
+              overflow-x: hidden;
+            }
             body {
               margin: 0;
-              padding: 24px;
+              padding: clamp(10px, 2.4vw, 18px);
               font: 16px/1.65 "Avenir Next", ui-rounded, system-ui, sans-serif;
               color: var(--text);
               background:
@@ -1085,23 +1090,53 @@ enum CompanionMarkdownRenderer {
                 var(--bg);
             }
             article {
-              max-width: 920px;
+              max-width: 980px;
               margin: 0 auto;
-              padding: 28px;
+              padding: clamp(14px, 3vw, 22px);
               border: 1px solid var(--border);
-              border-radius: 24px;
+              border-radius: 16px;
               background: var(--panel);
               backdrop-filter: blur(14px);
               box-shadow: 0 28px 60px rgba(15, 23, 42, 0.14);
+              min-width: 0;
+              overflow-wrap: anywhere;
+            }
+            article > :first-child { margin-top: 0; }
+            article > :last-child { margin-bottom: 0; }
+            p, li, th, td {
+              overflow-wrap: anywhere;
+              word-break: break-word;
             }
             pre, code {
               font-family: "SF Mono", "IBM Plex Mono", ui-monospace, monospace;
             }
             pre {
-              overflow-x: auto;
+              overflow-x: hidden;
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
               padding: 14px 16px;
-              border-radius: 16px;
+              border-radius: 10px;
               background: rgba(15, 23, 42, 0.08);
+            }
+            table {
+              width: 100%;
+              table-layout: fixed;
+              border-collapse: collapse;
+              margin: 1rem 0;
+              font-size: 0.92rem;
+              border: 1px solid var(--border);
+              border-radius: 10px;
+              overflow: hidden;
+            }
+            th, td {
+              padding: 8px 10px;
+              border: 1px solid var(--border);
+              vertical-align: top;
+              text-align: left;
+            }
+            th {
+              background: rgba(15, 23, 42, 0.06);
+              font-weight: 700;
             }
             blockquote {
               margin: 1.25rem 0;
@@ -1151,7 +1186,9 @@ enum CompanionMarkdownRenderer {
             codeFenceLines.removeAll(keepingCapacity: true)
         }
 
-        for line in lines {
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
             if line.hasPrefix("```") {
                 if inCodeFence {
                     flushCodeFence()
@@ -1160,17 +1197,20 @@ enum CompanionMarkdownRenderer {
                     flushList()
                 }
                 inCodeFence.toggle()
+                index += 1
                 continue
             }
 
             if inCodeFence {
                 codeFenceLines.append(line)
+                index += 1
                 continue
             }
 
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
                 flushParagraph()
                 flushList()
+                index += 1
                 continue
             }
 
@@ -1179,6 +1219,29 @@ enum CompanionMarkdownRenderer {
                 flushList()
                 let text = line.drop { $0 == "#" || $0 == " " }
                 html.append("<h\(headingLevel)>\(inline(String(text)))</h\(headingLevel)>")
+                index += 1
+                continue
+            }
+
+            if index + 1 < lines.count,
+               line.contains("|"),
+               isMarkdownTableSeparator(lines[index + 1]) {
+                flushParagraph()
+                flushList()
+
+                let header = splitMarkdownTableRow(line)
+                let alignments = tableAlignments(from: splitMarkdownTableRow(lines[index + 1]))
+                var rows: [[String]] = []
+                index += 2
+
+                while index < lines.count {
+                    let rowLine = lines[index]
+                    guard rowLine.contains("|"), !rowLine.trimmingCharacters(in: .whitespaces).isEmpty else { break }
+                    rows.append(splitMarkdownTableRow(rowLine))
+                    index += 1
+                }
+
+                html.append(renderTable(header: header, alignments: alignments, rows: rows))
                 continue
             }
 
@@ -1187,16 +1250,19 @@ enum CompanionMarkdownRenderer {
                 flushList()
                 let text = line.drop { $0 == ">" || $0 == " " }
                 html.append("<blockquote>\(inline(String(text)))</blockquote>")
+                index += 1
                 continue
             }
 
             if line.hasPrefix("- ") || line.hasPrefix("* ") {
                 flushParagraph()
                 listItems.append(String(line.dropFirst(2)))
+                index += 1
                 continue
             }
 
             paragraphLines.append(line.trimmingCharacters(in: .whitespaces))
+            index += 1
         }
 
         flushParagraph()
@@ -1212,6 +1278,97 @@ enum CompanionMarkdownRenderer {
         let count = trimmed.prefix { $0 == "#" }.count
         guard (1...6).contains(count), trimmed.dropFirst(count).first == " " else { return nil }
         return count
+    }
+
+    private static func renderTable(header: [String], alignments: [String?], rows: [[String]]) -> String {
+        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        guard columnCount > 0 else { return "" }
+
+        func normalized(_ cells: [String]) -> [String] {
+            if cells.count >= columnCount { return Array(cells.prefix(columnCount)) }
+            return cells + Array(repeating: "", count: columnCount - cells.count)
+        }
+
+        func alignmentAttribute(for index: Int) -> String {
+            guard index < alignments.count, let alignment = alignments[index] else { return "" }
+            return " style=\"text-align: \(alignment)\""
+        }
+
+        let headerCells = normalized(header).enumerated().map { index, cell in
+            "<th\(alignmentAttribute(for: index))>\(inline(cell))</th>"
+        }.joined()
+        let bodyRows = rows.map { row in
+            let cells = normalized(row).enumerated().map { index, cell in
+                "<td\(alignmentAttribute(for: index))>\(inline(cell))</td>"
+            }.joined()
+            return "<tr>\(cells)</tr>"
+        }.joined()
+
+        return "<table><thead><tr>\(headerCells)</tr></thead><tbody>\(bodyRows)</tbody></table>"
+    }
+
+    private static func tableAlignments(from cells: [String]) -> [String?] {
+        cells.map { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            let left = trimmed.hasPrefix(":")
+            let right = trimmed.hasSuffix(":")
+            if left && right { return "center" }
+            if right { return "right" }
+            if left { return "left" }
+            return nil
+        }
+    }
+
+    private static func isMarkdownTableSeparator(_ line: String) -> Bool {
+        let cells = splitMarkdownTableRow(line)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            guard trimmed.count >= 3 else { return false }
+            let withoutColons = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return !withoutColons.isEmpty && withoutColons.allSatisfy { $0 == "-" }
+        }
+    }
+
+    private static func splitMarkdownTableRow(_ line: String) -> [String] {
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        var inCode = false
+
+        for character in line {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+
+            if character == "\\" {
+                escaped = true
+                continue
+            }
+
+            if character == "`" {
+                inCode.toggle()
+                current.append(character)
+                continue
+            }
+
+            if character == "|", !inCode {
+                cells.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+                continue
+            }
+
+            current.append(character)
+        }
+
+        if escaped { current.append("\\") }
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+
+        if cells.first?.isEmpty == true { cells.removeFirst() }
+        if cells.last?.isEmpty == true { cells.removeLast() }
+        return cells
     }
 
     private static func inline(_ text: String) -> String {
@@ -2876,18 +3033,21 @@ enum CompanionPWA {
       width: 100%;
       max-width: 100%;
       border-collapse: collapse;
+      table-layout: fixed;
       font-size: 0.82rem;
       margin: 0.5em 0;
       border: 1px solid var(--border);
       border-radius: 8px;
-      display: block;
+      display: table;
       overflow: hidden;
-      overflow-x: auto;
     }
     .assistant-body th, .assistant-body td {
       padding: 5px 8px;
       border-bottom: 1px solid var(--border);
       text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .assistant-body th { background: var(--surface-sunk); font-weight: 600; }
 
@@ -2944,7 +3104,9 @@ enum CompanionPWA {
     .code-block pre {
       margin: 0;
       padding: 9px 11px;
-      overflow-x: auto;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
       font-family: var(--mono);
       font-size: 0.78rem;
       line-height: 1.42;
@@ -2952,7 +3114,15 @@ enum CompanionPWA {
       background: transparent;
       border: none;
     }
-    .code-block pre code { background: transparent; border: none; padding: 0; color: inherit; font-size: inherit; }
+    .code-block pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
 
     .tok-kw { color: var(--syntax-keyword); font-weight: 500; }
     .tok-str { color: var(--syntax-string); }
@@ -6085,15 +6255,16 @@ enum CompanionPWA {
           out.push(`<ol>${buf.map((b) => `<li>${renderInline(b)}</li>`).join("")}</ol>`);
           continue;
         }
-        if (/\|/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-+/.test(lines[i+1])) {
-          const header = line.split("|").map((c) => c.trim()).filter((c, idx, arr) => !(idx === 0 && !c) && !(idx === arr.length - 1 && !c));
+        if (/\|/.test(line) && i + 1 < lines.length && isMarkdownTableSeparator(lines[i + 1])) {
+          const header = splitMarkdownTableRow(line);
+          const alignments = tableAlignments(splitMarkdownTableRow(lines[i + 1]));
           i += 2;
           const rows = [];
           while (i < lines.length && /\|/.test(lines[i])) {
-            rows.push(lines[i].split("|").map((c) => c.trim()).filter((c, idx, arr) => !(idx === 0 && !c) && !(idx === arr.length - 1 && !c)));
+            rows.push(splitMarkdownTableRow(lines[i]));
             i++;
           }
-          out.push(`<table><thead><tr>${header.map((h) => `<th>${renderInline(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${renderInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+          out.push(renderMarkdownTable(header, alignments, rows));
           continue;
         }
         const buf = [];
@@ -6101,6 +6272,79 @@ enum CompanionPWA {
         out.push(`<p>${renderInline(buf.join("\n")).replace(/\n/g, "<br>")}</p>`);
       }
       return out.join("\n");
+    }
+
+    function renderMarkdownTable(header, alignments, rows) {
+      const columnCount = Math.max(header.length, ...rows.map((r) => r.length), 0);
+      if (!columnCount) return "";
+      const normalize = (cells) => {
+        const next = cells.slice(0, columnCount);
+        while (next.length < columnCount) next.push("");
+        return next;
+      };
+      const alignAttr = (idx) => alignments[idx] ? ` style="text-align: ${alignments[idx]}"` : "";
+      const head = normalize(header).map((h, idx) => `<th${alignAttr(idx)}>${renderInline(h)}</th>`).join("");
+      const body = rows.map((row) => {
+        const cells = normalize(row).map((c, idx) => `<td${alignAttr(idx)}>${renderInline(c)}</td>`).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
+      return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function tableAlignments(cells) {
+      return cells.map((cell) => {
+        const trimmed = cell.trim();
+        const left = trimmed.startsWith(":");
+        const right = trimmed.endsWith(":");
+        if (left && right) return "center";
+        if (right) return "right";
+        if (left) return "left";
+        return "";
+      });
+    }
+
+    function isMarkdownTableSeparator(line) {
+      const cells = splitMarkdownTableRow(line);
+      return cells.length > 0 && cells.every((cell) => {
+        const trimmed = cell.trim();
+        if (trimmed.length < 3) return false;
+        const core = trimmed.replace(/^:/, "").replace(/:$/, "");
+        return /^-+$/.test(core);
+      });
+    }
+
+    function splitMarkdownTableRow(line) {
+      const cells = [];
+      let current = "";
+      let escaped = false;
+      let inCode = false;
+      for (const ch of line) {
+        if (escaped) {
+          current += ch;
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === "`") {
+          inCode = !inCode;
+          current += ch;
+          continue;
+        }
+        if (ch === "|" && !inCode) {
+          cells.push(current.trim());
+          current = "";
+          continue;
+        }
+        current += ch;
+      }
+      if (escaped) current += "\\";
+      cells.push(current.trim());
+      if (cells[0] === "") cells.shift();
+      if (cells[cells.length - 1] === "") cells.pop();
+      return cells;
     }
 
     function renderInline(text) {
@@ -6278,7 +6522,7 @@ enum CompanionPWA {
     """#
 
     static let serviceWorkerJavaScript = #"""
-    const CACHE = "miwhisper-companion-v11";
+    const CACHE = "miwhisper-companion-v12";
     const ASSETS = ["/", "/app.css", "/app.js", "/manifest.webmanifest", "/app-icon.png"];
 
     self.addEventListener("install", (event) => {

@@ -2,6 +2,12 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.12
+
+- Improved Companion PWA Markdown rendering for pipe tables, including alignment rows, escaped pipes, and pipes inside inline code.
+- Reduced Markdown preview padding and prevented horizontal page scroll by wrapping long table cells, long words, and code/preformatted lines.
+- Bumped the Companion PWA service worker cache so installed browser apps refresh the Markdown rendering fixes.
+
 ## v0.1.0-alpha.11
 
 - Restored and strengthened the Companion PWA voice transcription progress indicator while audio is prepared, uploaded, and transcribed.
