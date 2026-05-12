@@ -143,19 +143,19 @@ Use it to:
 - search workspace files;
 - preview generated HTML, Markdown, images, PDFs, text, logs, diffs, and patches.
 
-The PWA can be installed from the browser's install/share menu. On iPhone or iPad, microphone capture requires a secure context, so plain `http://127.0.0.1` is only useful on the Mac itself.
+The PWA can be installed from the browser's install/share menu. On iPhone or iPad, microphone capture requires a secure context, so plain `http://127.0.0.1` is only useful on the Mac itself. For an iPhone or iPad, assume you need the Tailscale Serve step below.
 
 ## Remote PWA With Tailscale
 
-MiWhisper no longer configures Tailscale Serve automatically in public builds. That is deliberate: `tailscale serve --bg --yes 6009` can overwrite an existing root Serve configuration.
+MiWhisper does not configure Tailscale Serve automatically in public builds. That is deliberate: `tailscale serve --bg --yes 6009` can overwrite an existing Serve configuration. But for iPhone/iPad microphone capture and for the native iOS wrapper, the HTTPS tailnet URL is the expected setup.
 
-If you understand the risk and want the Companion PWA on your private tailnet, run this yourself:
+Run this on the Mac after MiWhisper is open:
 
 ```bash
 tailscale serve --bg --yes 6009
 ```
 
-Then open the HTTPS tailnet URL that Tailscale prints. Keep in mind that the Companion API can continue Codex sessions and read allowed workspace files, so only expose it on a network you trust.
+Then open the HTTPS tailnet URL that Tailscale prints, for example `https://your-mac.your-tailnet.ts.net`. Keep in mind that the Companion API can continue Codex sessions and read allowed workspace files, so only expose it on a network you trust.
 
 To inspect or remove your Tailscale Serve configuration:
 
@@ -163,6 +163,39 @@ To inspect or remove your Tailscale Serve configuration:
 tailscale serve status
 tailscale serve reset
 ```
+
+## iOS Companion Wrapper
+
+The optional iOS app in [CompanionIOS](./CompanionIOS) is a thin native wrapper around the same Companion PWA served by the Mac. It does not contain a separate chat client. Its job is to load the HTTPS Tailnet URL in `WKWebView` and provide native iOS speech for read-aloud and car-mode voice commands.
+
+Before using the iOS wrapper:
+
+1. Launch MiWhisper on the Mac.
+2. Run `tailscale serve --bg --yes 6009` on the Mac.
+3. Open `tailscale serve status` and copy the HTTPS URL.
+4. Build/install the iOS wrapper.
+5. In the iOS wrapper, set the Companion URL to that HTTPS Tailnet URL.
+
+Build for the simulator:
+
+```bash
+xcodebuild -project CompanionIOS/MiWhisperCompanion.xcodeproj \
+  -scheme MiWhisperCompanion \
+  -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -derivedDataPath build/CompanionIOS \
+  build
+```
+
+Install on a paired iPhone:
+
+```bash
+MIWHISPER_IOS_DEVICE_ID=<device-id> \
+MIWHISPER_IOS_TEAM_ID=<team-id> \
+./scripts/install-ios-companion.sh
+```
+
+Find the device id with `xcrun xctrace list devices` or `xcrun devicectl list devices`. If iOS blocks the first launch, trust the Apple Development profile in Settings > General > VPN & Device Management, then open MiWhisper Companion manually.
 
 ## Companion API
 
@@ -303,6 +336,7 @@ High-level pieces:
 ## Project Docs
 
 - [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) for agent-assisted installation and validation.
+- [Docs/COMPANION_CODEX_PARITY_PLAN.md](./Docs/COMPANION_CODEX_PARITY_PLAN.md) for the Companion roadmap and current native/PWA split.
 - [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, testing, and pull request expectations.
 - [SECURITY.md](./SECURITY.md) for responsible reporting guidance.
 - [CHANGELOG.md](./CHANGELOG.md) for release history.

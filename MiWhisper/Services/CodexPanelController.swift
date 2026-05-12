@@ -81,6 +81,7 @@ struct CodexSessionRecord: Codable, Identifiable {
     var modelOverride: String?
     var reasoningEffort: CodexReasoningEffort?
     var serviceTier: CodexServiceTier?
+    var accessMode: CodexAccessMode?
     var isBusy: Bool?
     var latestResponse: String
     var activity: [CodexActivityEntry]
@@ -99,6 +100,7 @@ final class CodexSessionStore: ObservableObject {
     private static let maxActivitiesPerSession = 200
 
     private let defaults = UserDefaults.standard
+    private let fileManager = FileManager.default
     private let maxLatestResponseCharacters = 48_000
 
     private init() {
@@ -111,7 +113,8 @@ final class CodexSessionStore: ObservableObject {
         workingDirectory: String,
         modelOverride: String?,
         reasoningEffort: CodexReasoningEffort,
-        serviceTier: CodexServiceTier
+        serviceTier: CodexServiceTier,
+        accessMode: CodexAccessMode
     ) -> CodexSessionRecord {
         let record = CodexSessionRecord(
             id: UUID(),
@@ -122,6 +125,7 @@ final class CodexSessionStore: ObservableObject {
             modelOverride: modelOverride,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            accessMode: accessMode,
             isBusy: false,
             latestResponse: "",
             activity: [],
@@ -148,6 +152,7 @@ final class CodexSessionStore: ObservableObject {
         modelOverride: String?,
         reasoningEffort: CodexReasoningEffort,
         serviceTier: CodexServiceTier,
+        accessMode: CodexAccessMode,
         activity: [CodexActivityEntry] = [],
         latestResponse: String = "",
         createdAt: Date = Date()
@@ -161,6 +166,7 @@ final class CodexSessionStore: ObservableObject {
             modelOverride: modelOverride,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            accessMode: accessMode,
             isBusy: false,
             latestResponse: latestResponse,
             activity: sanitizedActivity(activity),
@@ -207,7 +213,8 @@ final class CodexSessionStore: ObservableObject {
 
     private func load() {
         let currentBusyState = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.isBusy ?? false) })
-        guard let data = defaults.data(forKey: Self.defaultsKey) else {
+        let loaded = loadStoredSessionData()
+        guard let data = loaded.data else {
             sessions = []
             return
         }
@@ -234,7 +241,9 @@ final class CodexSessionStore: ObservableObject {
         sessions = normalizedSessions
 
         if let normalizedData = try? JSONEncoder().encode(normalizedSessions), normalizedData != data {
-            defaults.set(normalizedData, forKey: Self.defaultsKey)
+            save()
+        } else if loaded.source == .defaults {
+            save()
         }
     }
 
@@ -249,7 +258,46 @@ final class CodexSessionStore: ObservableObject {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(sessions) else { return }
-        defaults.set(data, forKey: Self.defaultsKey)
+        do {
+            let url = sessionHistoryFileURL()
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+            if defaults.object(forKey: Self.defaultsKey) != nil {
+                defaults.removeObject(forKey: Self.defaultsKey)
+            }
+        } catch {
+            NSLog("[MiWhisper][CodexSessionStore] failed to save session history file error=%@", error.localizedDescription)
+            if data.count < 3_500_000 {
+                defaults.set(data, forKey: Self.defaultsKey)
+            }
+        }
+    }
+
+    private enum StorageSource {
+        case file
+        case defaults
+    }
+
+    private func loadStoredSessionData() -> (data: Data?, source: StorageSource?) {
+        let url = sessionHistoryFileURL()
+        if let fileData = try? Data(contentsOf: url) {
+            return (fileData, .file)
+        }
+        if let defaultsData = defaults.data(forKey: Self.defaultsKey) {
+            return (defaultsData, .defaults)
+        }
+        return (nil, nil)
+    }
+
+    private func sessionHistoryFileURL() -> URL {
+        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return baseURL
+            .appendingPathComponent("MiWhisper", isDirectory: true)
+            .appendingPathComponent("codex-session-history.json", isDirectory: false)
     }
 
     private func decodeSessionRecords(from data: Data) -> [CodexSessionRecord] {
@@ -585,6 +633,26 @@ private struct CodexNativeThreadHistory {
     }()
 }
 
+private func codexActivityHistoryMatches(_ lhs: [CodexActivityEntry], _ rhs: [CodexActivityEntry]) -> Bool {
+    guard lhs.count == rhs.count else { return false }
+
+    for (left, right) in zip(lhs, rhs) {
+        guard left.kind == right.kind,
+              left.blockKind == right.blockKind,
+              left.title == right.title,
+              left.detail == right.detail,
+              left.detailStyle == right.detailStyle,
+              left.command == right.command,
+              left.relatedFiles == right.relatedFiles,
+              abs(left.createdAt.timeIntervalSince(right.createdAt)) < 0.001
+        else {
+            return false
+        }
+    }
+
+    return true
+}
+
 @MainActor
 final class CodexSessionManager {
     static let shared = CodexSessionManager()
@@ -598,7 +666,8 @@ final class CodexSessionManager {
         workingDirectory: String,
         modelOverride: String?,
         reasoningEffort: CodexReasoningEffort,
-        serviceTier: CodexServiceTier
+        serviceTier: CodexServiceTier,
+        accessMode: CodexAccessMode = .fullAccess
     ) {
         let sessionID = createSession(
             prompt: prompt,
@@ -607,6 +676,7 @@ final class CodexSessionManager {
             modelOverride: modelOverride,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            accessMode: accessMode,
             shouldPresentWindow: true
         )
         guard let model = models[sessionID] else { return }
@@ -621,6 +691,7 @@ final class CodexSessionManager {
         modelOverride: String?,
         reasoningEffort: CodexReasoningEffort,
         serviceTier: CodexServiceTier,
+        accessMode: CodexAccessMode = .fullAccess,
         shouldPresentWindow: Bool
     ) -> UUID {
         let title = CodexSessionTitleBuilder.make(for: prompt)
@@ -630,7 +701,8 @@ final class CodexSessionManager {
             workingDirectory: workingDirectory,
             modelOverride: modelOverride,
             reasoningEffort: reasoningEffort,
-            serviceTier: serviceTier
+            serviceTier: serviceTier,
+            accessMode: accessMode
         )
         let model = CodexSessionViewModel(record: record)
         models[model.id] = model
@@ -671,7 +743,8 @@ final class CodexSessionManager {
         executablePath: String,
         modelOverride: String?,
         reasoningEffort: CodexReasoningEffort,
-        serviceTier: CodexServiceTier
+        serviceTier: CodexServiceTier,
+        accessMode: CodexAccessMode = .fullAccess
     ) -> UUID {
         if let existingRecord = CodexSessionStore.shared.session(threadID: threadID) {
             hydrateNativeThreadIfNeeded(existingRecord)
@@ -688,6 +761,7 @@ final class CodexSessionManager {
             modelOverride: modelOverride,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            accessMode: accessMode,
             activity: history?.activity ?? [],
             latestResponse: history?.latestResponse ?? "",
             createdAt: history?.createdAt ?? Date()
@@ -711,16 +785,36 @@ final class CodexSessionManager {
         CodexSessionStore.shared.sessions
     }
 
-    func send(prompt: String, to recordID: UUID) throws {
+    func send(
+        prompt: String,
+        to recordID: UUID,
+        reasoningEffort: CodexReasoningEffort? = nil,
+        serviceTier: CodexServiceTier? = nil,
+        accessMode: CodexAccessMode? = nil,
+        attachments: [CodexTurnAttachment] = []
+    ) throws {
         guard let model = model(for: recordID) else {
             throw CodexRunnerError.missingThread
         }
-        try model.sendPromptFromBridge(prompt)
+        try model.sendPromptFromBridge(
+            prompt,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            accessMode: accessMode,
+            attachments: attachments
+        )
     }
 
     func stop(recordID: UUID) {
         guard let model = model(for: recordID) else { return }
         model.stopCurrentTurn()
+    }
+
+    func resolveApproval(recordID: UUID, requestID: Int, decision: String) throws {
+        guard let model = model(for: recordID) else {
+            throw CodexRunnerError.missingThread
+        }
+        try model.resolveApproval(requestID: requestID, decision: decision)
     }
 
     func focus(recordID: UUID) {
@@ -753,25 +847,39 @@ final class CodexSessionManager {
     }
 
     private func hydrateNativeThreadIfNeeded(_ record: CodexSessionRecord) {
-        guard record.activity.isEmpty,
+        guard record.isBusy != true,
+              models[record.id]?.isBusy != true,
               let threadID = record.threadID,
               let history = CodexNativeThreadHistory.load(threadID: threadID)
         else {
             return
         }
 
+        let historyCanRefreshActivity = record.activity.isEmpty || history.activity.count >= record.activity.count
+        let activityNeedsRefresh = historyCanRefreshActivity && !codexActivityHistoryMatches(record.activity, history.activity)
+        let importedLatestResponse = history.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? CodexSessionViewModel.derivedLatestResponse(from: history.activity)
+            : history.latestResponse
+        let latestNeedsRefresh = record.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !importedLatestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        guard activityNeedsRefresh || latestNeedsRefresh else {
+            return
+        }
+
         CodexSessionStore.shared.updateSession(id: record.id) { storedRecord in
-            guard storedRecord.activity.isEmpty else { return }
-            storedRecord.activity = history.activity
-            if storedRecord.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                storedRecord.latestResponse = history.latestResponse
+            if activityNeedsRefresh {
+                storedRecord.activity = history.activity
+            }
+            if activityNeedsRefresh || storedRecord.latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                storedRecord.latestResponse = importedLatestResponse
             }
             storedRecord.createdAt = min(storedRecord.createdAt, history.createdAt)
         }
 
-        models[record.id]?.hydrateHistoryIfNeeded(
+        models[record.id]?.refreshHistoryIfChanged(
             activity: history.activity,
-            latestResponse: history.latestResponse
+            latestResponse: importedLatestResponse
         )
     }
 }
@@ -960,6 +1068,12 @@ final class CodexSessionViewModel: ObservableObject {
             syncSessionRecord()
         }
     }
+    @Published var accessMode: CodexAccessMode = .fullAccess {
+        didSet {
+            guard oldValue != accessMode else { return }
+            syncSessionRecord()
+        }
+    }
 
     private let runner: CodexRunner
     private let executablePath: String
@@ -975,6 +1089,7 @@ final class CodexSessionViewModel: ObservableObject {
         modelOverride = record.modelOverride ?? ""
         reasoningEffort = record.reasoningEffort ?? .useConfigDefault
         serviceTier = record.serviceTier ?? .useConfigDefault
+        accessMode = record.accessMode ?? .fullAccess
         executablePath = record.executablePath
         workingDirectory = record.workingDirectory
         runner = CodexRunner(
@@ -1007,12 +1122,28 @@ final class CodexSessionViewModel: ObservableObject {
         runner.cancel()
     }
 
-    func sendPromptFromBridge(_ prompt: String) throws {
+    func sendPromptFromBridge(
+        _ prompt: String,
+        reasoningEffort: CodexReasoningEffort? = nil,
+        serviceTier: CodexServiceTier? = nil,
+        accessMode: CodexAccessMode? = nil,
+        attachments: [CodexTurnAttachment] = []
+    ) throws {
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else {
             throw CodexRunnerError.emptyPrompt
         }
-        send(prompt: trimmedPrompt)
+        send(
+            prompt: trimmedPrompt,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            accessMode: accessMode,
+            attachments: attachments
+        )
+    }
+
+    func resolveApproval(requestID: Int, decision: String) throws {
+        try runner.resolveServerRequest(requestID: requestID, decision: decision)
     }
 
     func hydrateHistoryIfNeeded(activity importedActivity: [CodexActivityEntry], latestResponse importedLatestResponse: String) {
@@ -1024,6 +1155,29 @@ final class CodexSessionViewModel: ObservableObject {
                 ? Self.derivedLatestResponse(from: importedActivity)
                 : importedLatestResponse
         }
+        trimActivity()
+        requestPersist(immediate: true)
+    }
+
+    func refreshHistoryIfChanged(activity importedActivity: [CodexActivityEntry], latestResponse importedLatestResponse: String) {
+        guard !isBusy else { return }
+
+        var changed = false
+        if !importedActivity.isEmpty && !codexActivityHistoryMatches(activity, importedActivity) {
+            activity = importedActivity
+            changed = true
+        }
+
+        let resolvedLatestResponse = importedLatestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? Self.derivedLatestResponse(from: importedActivity)
+            : importedLatestResponse
+        if !resolvedLatestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            (changed || latestResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+            latestResponse = resolvedLatestResponse
+            changed = true
+        }
+
+        guard changed else { return }
         trimActivity()
         requestPersist(immediate: true)
     }
@@ -1141,14 +1295,34 @@ final class CodexSessionViewModel: ObservableObject {
         }
     }
 
-    private func send(prompt: String) {
+    private func send(
+        prompt: String,
+        reasoningEffort overrideReasoningEffort: CodexReasoningEffort? = nil,
+        serviceTier overrideServiceTier: CodexServiceTier? = nil,
+        accessMode overrideAccessMode: CodexAccessMode? = nil,
+        attachments: [CodexTurnAttachment] = []
+    ) {
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else { return }
 
+        let turnReasoningEffort = overrideReasoningEffort ?? reasoningEffort
+        let turnServiceTier = overrideServiceTier ?? serviceTier
+        let turnAccessMode = overrideAccessMode ?? accessMode
+
         do {
             if isBusy {
-                try runner.steer(prompt: trimmedPrompt)
+                try runner.steer(prompt: trimmedPrompt, attachments: attachments)
                 return
+            }
+
+            if let overrideReasoningEffort {
+                reasoningEffort = overrideReasoningEffort
+            }
+            if let overrideServiceTier {
+                serviceTier = overrideServiceTier
+            }
+            if let overrideAccessMode {
+                accessMode = overrideAccessMode
             }
 
             if let threadID {
@@ -1157,8 +1331,10 @@ final class CodexSessionViewModel: ObservableObject {
                         sessionID: threadID,
                         prompt: trimmedPrompt,
                         modelOverride: modelOverride,
-                        reasoningEffort: reasoningEffort,
-                        serviceTier: serviceTier
+                        reasoningEffort: turnReasoningEffort,
+                        serviceTier: turnServiceTier,
+                        accessMode: turnAccessMode,
+                        attachments: attachments
                     )
                 )
             } else {
@@ -1168,8 +1344,10 @@ final class CodexSessionViewModel: ObservableObject {
                     command: .start(
                         prompt: trimmedPrompt,
                         modelOverride: modelOverride,
-                        reasoningEffort: reasoningEffort,
-                        serviceTier: serviceTier
+                        reasoningEffort: turnReasoningEffort,
+                        serviceTier: turnServiceTier,
+                        accessMode: turnAccessMode,
+                        attachments: attachments
                     )
                 )
             }
@@ -1228,11 +1406,12 @@ final class CodexSessionViewModel: ObservableObject {
             record.modelOverride = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : modelOverride
             record.reasoningEffort = reasoningEffort
             record.serviceTier = serviceTier
+            record.accessMode = accessMode
             record.isBusy = isBusy
         }
     }
 
-    private static func derivedLatestResponse(from activity: [CodexActivityEntry]) -> String {
+    fileprivate static func derivedLatestResponse(from activity: [CodexActivityEntry]) -> String {
         activity
             .reversed()
             .first {

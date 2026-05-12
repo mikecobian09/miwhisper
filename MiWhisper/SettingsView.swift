@@ -96,6 +96,24 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+
+                Toggle(
+                    "Keep Companion alive after crashes",
+                    isOn: Binding(
+                        get: { appState.companionWatchdogEnabled },
+                        set: { appState.setCompanionWatchdog($0) }
+                    )
+                )
+
+                Text("Installs a user LaunchAgent that relaunches MiWhisper if it crashes. A normal Quit writes a marker so the watchdog does not reopen it against your intent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let companionWatchdogErrorMessage = appState.companionWatchdogErrorMessage {
+                    Text(companionWatchdogErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
 
             Section("Whisper.cpp") {
@@ -198,6 +216,24 @@ struct SettingsView: View {
                 Button("Reset Paths to Workspace Defaults") {
                     appState.resetPathsToDefaults()
                 }
+            }
+
+            Section("Mobile Companion") {
+                Text("Local bridge")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(CompanionBridge.shared.localURLString)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Text("Tailnet command")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("tailscale serve --bg --yes 6009")
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Text("Run this manually on the Mac when you want HTTPS for iPhone or iPad. Keep the embedded server on localhost and open the resulting `https://<host>.ts.net` URL from Safari or the iOS wrapper.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Bootstrap") {

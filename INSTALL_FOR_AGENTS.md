@@ -154,6 +154,66 @@ If the app is installed elsewhere, the user can set the path later in MiWhisper 
 
 Do not claim Codex mode is configured just because the binary exists. If asked, verify it separately.
 
+## Optional Companion HTTPS Setup
+
+Use this when the user wants Companion from an iPhone, iPad, or the native iOS wrapper.
+
+MiWhisper serves Companion on localhost only. iOS browser microphone capture needs HTTPS, so the normal private-network setup is Tailscale Serve.
+
+On the Mac running MiWhisper:
+
+```bash
+tailscale serve --bg --yes 6009
+tailscale serve status
+```
+
+Give the user the `https://...ts.net` URL printed by Tailscale. Do not run this silently if the user already has a Tailscale Serve configuration they care about; `--yes` accepts replacement prompts.
+
+To undo it:
+
+```bash
+tailscale serve reset
+```
+
+## Optional iOS Companion Wrapper
+
+Use this only when the user wants the native iOS wrapper, not just the browser PWA.
+
+Important:
+
+- The wrapper loads the Mac-hosted Companion PWA in `WKWebView`.
+- It needs the HTTPS Tailnet URL from `tailscale serve --bg --yes 6009`.
+- It adds native iOS speech/read-aloud and car-mode command hooks.
+- It is a local developer build, not an App Store distribution.
+
+Build for a simulator:
+
+```bash
+xcodebuild -project CompanionIOS/MiWhisperCompanion.xcodeproj \
+  -scheme MiWhisperCompanion \
+  -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -derivedDataPath build/CompanionIOS \
+  build
+```
+
+Install on a paired iPhone:
+
+```bash
+MIWHISPER_IOS_DEVICE_ID=<device-id> \
+MIWHISPER_IOS_TEAM_ID=<team-id> \
+./scripts/install-ios-companion.sh
+```
+
+Find device ids with:
+
+```bash
+xcrun xctrace list devices
+xcrun devicectl list devices
+```
+
+After install, open the iOS wrapper and set the Companion URL to the HTTPS Tailscale URL. If iOS blocks launch because the profile is not trusted, ask the user to open Settings > General > VPN & Device Management and trust the Apple Development profile.
+
 ## Permissions the User Must Approve
 
 MiWhisper depends on these macOS permissions:

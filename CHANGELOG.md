@@ -2,6 +2,37 @@
 
 All notable public-facing changes to MiWhisper should be recorded here.
 
+## v0.1.0-alpha.14
+
+- Added the native iOS Companion wrapper in `CompanionIOS/`, loading the Mac-hosted Companion PWA inside `WKWebView` with native read-aloud and car-mode command hooks.
+- Added `scripts/install-ios-companion.sh` for installing the iOS wrapper on a paired device after selecting an Apple Development team.
+- Added an opt-in Companion watchdog that installs a user LaunchAgent to relaunch MiWhisper after crashes while respecting normal user quits.
+- Added Companion PWA runtime controls for Plan, Fast mode, reasoning effort, Full Access visibility, and completion notifications.
+- Added local follow-up queueing for busy Companion sessions while keeping immediate sends mapped to live Codex steering.
+- Hardened Codex app-server JSON-RPC handling so server-originated requests are surfaced instead of being mistaken for responses.
+- Added a live Companion session stream and Codex status strip so PWA sessions reflect Mac-side activity, active commands, patches, warnings, and file/tool counts without a manual refresh.
+- Expanded Codex app-server notification handling for live plan updates, turn diffs, file-change deltas, token usage, and protocol warnings.
+- Added first-pass Companion On-Request plumbing: sessions can be started with workspace-write/on-request access and command/file-change approval requests are rendered as actionable mobile approval cards.
+- Restyled the Companion PWA toward Codex's native app feel with a neutral SF-style palette, calmer sidebar, open assistant turns, softer user bubbles, compact runtime controls, quieter activity/tool/approval surfaces, stronger dark mode, and a less branded composer.
+- Reduced Companion PWA flicker by making session lists, live status, topbar, and active chat renders signature-based/coalesced instead of replacing DOM on every SSE/polling tick.
+- Improved Companion PWA live update reliability by including live status/detail and streamed activity text tails in render signatures, plus a visible PWA version marker and service-worker controller reload for stale installed clients.
+- Changed Companion PWA Codex turns to render a chronological timeline, keeping reasoning text, final text, commands, tools, approvals, and file edits interleaved instead of collapsing them into one response plus a final activity bucket.
+- Refined Companion PWA mobile chrome with a translucent compact topbar, slimmer runtime controls, a lower-profile composer, shorter input copy, and contextual helper text so responses keep more visual priority.
+- Added visible Codex context compaction status entries so Companion shows when Codex is compacting older context and when compaction has completed.
+- Fixed Companion PWA prompt sends so existing-session posts apply the returned live session detail immediately and restart the session stream, preventing successful sends from looking like no-ops.
+- Raised the Codex app-server WebSocket message limit so long native Codex threads can be resumed from Companion instead of disconnecting with oversized frames.
+- Moved Codex session history persistence out of `UserDefaults` and into an Application Support JSON file to avoid macOS preference-size failures that could make the PWA flicker or revert session state.
+- Reduced active-chat flicker further by patching stable timeline nodes instead of clearing and rebuilding the full conversation on each live update.
+- Made the live status strip update text and metric nodes in place instead of replacing the whole top status surface during active runs.
+- Grouped consecutive command/tool/patch activity in Companion turns into a single collapsible execution summary so Codex text and final responses stay visually primary without losing traceability.
+- Added clearer Companion run-state indicators with distinct icons/colors for thinking, working, attention, and finished states in the live strip plus working-state chips in the thread list.
+- Added first-pass Companion image attachments from camera/library, wiring PWA uploads through local files into Codex app-server `UserInput` instead of smuggling images into text prompts.
+- Made Companion continuation sends carry runtime overrides for the next non-busy turn, armed `/subagents` as a one-shot composer mode, and removed the Git commit shortcut from this non-Git parity pass.
+- Expanded Companion On-Request handling to surface general Codex permission requests as actionable mobile cards, and made the PWA speed control explicit with Default/Fast/Flex service-tier choices.
+- Smoothed Companion live updates by reusing visible assistant/thinking DOM nodes during streaming updates and disabling implicit smooth-scroll during pinned auto-follow.
+- Made Companion timeline updates incremental inside assistant turns so streaming text patches individual timeline items instead of rebuilding the whole assistant response block, and fixed final answers with Markdown bullet lists being misclassified as diffs.
+- Bumped the Companion PWA service worker cache so installed browser apps refresh the runtime-control UI.
+
 ## v0.1.0-alpha.13
 
 - Added `gpt-5.5` to the selectable Codex model presets.

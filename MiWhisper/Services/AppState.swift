@@ -237,6 +237,40 @@ enum CodexServiceTier: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum CodexAccessMode: String, CaseIterable, Identifiable, Codable {
+    case fullAccess
+    case onRequest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fullAccess:
+            return "Full Access"
+        case .onRequest:
+            return "On-Request"
+        }
+    }
+
+    var approvalPolicy: String {
+        switch self {
+        case .fullAccess:
+            return "never"
+        case .onRequest:
+            return "on-request"
+        }
+    }
+
+    var sandboxMode: String {
+        switch self {
+        case .fullAccess:
+            return "danger-full-access"
+        case .onRequest:
+            return "workspace-write"
+        }
+    }
+}
+
 struct CodexModelOption: Identifiable, Hashable {
     let id: String
     let title: String
@@ -718,6 +752,7 @@ final class AppState: ObservableObject {
     private static let codexReasoningEffortKey = "codexDefaultReasoningEffort"
     private static let codexServiceTierKey = "codexServiceTier"
     private static let launchAtLoginPreferenceKey = "launchAtLoginPreference"
+    private static let companionWatchdogPreferenceKey = "companionWatchdogPreference"
     private static let estimatedTypingWordsPerMinute = 38.0
     private struct LastInsertionState {
         let processIdentifier: pid_t
@@ -742,6 +777,8 @@ final class AppState: ObservableObject {
     @Published var launchAtLoginEnabled = false
     @Published var launchAtLoginRequiresApproval = false
     @Published var launchAtLoginErrorMessage: String?
+    @Published var companionWatchdogEnabled = false
+    @Published var companionWatchdogErrorMessage: String?
 
     private let defaults = UserDefaults.standard
     private let recorder = AudioRecorder()
@@ -960,6 +997,7 @@ final class AppState: ObservableObject {
         loadUsageDailyBuckets()
         hasHotkeyMonitor = HotkeyMonitor.shared.isAvailable
         syncLaunchAtLoginState()
+        syncCompanionWatchdogState()
 
         modelDownloader.onProgress = { [weak self] presetID, bytesWritten, totalBytesExpected, startedAt in
             self?.handleModelDownloadProgress(
@@ -1112,6 +1150,31 @@ final class AppState: ObservableObject {
 
         launchAtLoginEnabled = false
         launchAtLoginRequiresApproval = false
+    }
+
+    func setCompanionWatchdog(_ enabled: Bool) {
+        do {
+            if enabled {
+                try CompanionWatchdog.shared.install()
+            } else {
+                CompanionWatchdog.shared.uninstall()
+            }
+            defaults.set(enabled, forKey: Self.companionWatchdogPreferenceKey)
+            companionWatchdogErrorMessage = nil
+            syncCompanionWatchdogState()
+            statusMessage = enabled ? "Companion watchdog enabled" : "Companion watchdog disabled"
+        } catch {
+            companionWatchdogErrorMessage = error.localizedDescription
+            syncCompanionWatchdogState()
+            statusMessage = "Could not change Companion watchdog"
+        }
+    }
+
+    func syncCompanionWatchdogState() {
+        companionWatchdogEnabled = CompanionWatchdog.shared.isInstalled
+        if defaults.bool(forKey: Self.companionWatchdogPreferenceKey), !companionWatchdogEnabled {
+            companionWatchdogEnabled = false
+        }
     }
 
     func toggleRecording() {

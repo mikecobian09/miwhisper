@@ -208,13 +208,37 @@ enum CodexRunnerError: LocalizedError {
     }
 }
 
+struct CodexTurnAttachment {
+    enum Kind: String {
+        case localImage
+        case image
+    }
+
+    let kind: Kind
+    let path: String?
+    let url: String?
+    let name: String?
+    let mimeType: String?
+
+    var appServerInputItem: [String: Any]? {
+        switch kind {
+        case .localImage:
+            guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return ["type": "local_image", "path": path]
+        case .image:
+            guard let url, !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return ["type": "image", "image_url": url]
+        }
+    }
+}
+
 enum CodexTurnCommand {
-    case start(prompt: String, modelOverride: String?, reasoningEffort: CodexReasoningEffort, serviceTier: CodexServiceTier)
-    case resume(sessionID: String, prompt: String, modelOverride: String?, reasoningEffort: CodexReasoningEffort, serviceTier: CodexServiceTier)
+    case start(prompt: String, modelOverride: String?, reasoningEffort: CodexReasoningEffort, serviceTier: CodexServiceTier, accessMode: CodexAccessMode, attachments: [CodexTurnAttachment])
+    case resume(sessionID: String, prompt: String, modelOverride: String?, reasoningEffort: CodexReasoningEffort, serviceTier: CodexServiceTier, accessMode: CodexAccessMode, attachments: [CodexTurnAttachment])
 
     var prompt: String {
         switch self {
-        case let .start(prompt, _, _, _), let .resume(_, prompt, _, _, _):
+        case let .start(prompt, _, _, _, _, _), let .resume(_, prompt, _, _, _, _, _):
             return prompt
         }
     }
@@ -223,14 +247,14 @@ enum CodexTurnCommand {
         switch self {
         case .start:
             return nil
-        case let .resume(sessionID, _, _, _, _):
+        case let .resume(sessionID, _, _, _, _, _, _):
             return sessionID
         }
     }
 
     var modelOverride: String? {
         switch self {
-        case let .start(_, modelOverride, _, _), let .resume(_, _, modelOverride, _, _):
+        case let .start(_, modelOverride, _, _, _, _), let .resume(_, _, modelOverride, _, _, _, _):
             guard let modelOverride else { return nil }
             let normalized = modelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
             return normalized.isEmpty ? nil : normalized
@@ -239,16 +263,38 @@ enum CodexTurnCommand {
 
     var reasoningEffort: CodexReasoningEffort {
         switch self {
-        case let .start(_, _, reasoningEffort, _), let .resume(_, _, _, reasoningEffort, _):
+        case let .start(_, _, reasoningEffort, _, _, _), let .resume(_, _, _, reasoningEffort, _, _, _):
             return reasoningEffort
         }
     }
 
     var serviceTier: CodexServiceTier {
         switch self {
-        case let .start(_, _, _, serviceTier), let .resume(_, _, _, _, serviceTier):
+        case let .start(_, _, _, serviceTier, _, _), let .resume(_, _, _, _, serviceTier, _, _):
             return serviceTier
         }
+    }
+
+    var accessMode: CodexAccessMode {
+        switch self {
+        case let .start(_, _, _, _, accessMode, _), let .resume(_, _, _, _, _, accessMode, _):
+            return accessMode
+        }
+    }
+
+    var attachments: [CodexTurnAttachment] {
+        switch self {
+        case let .start(_, _, _, _, _, attachments), let .resume(_, _, _, _, _, _, attachments):
+            return attachments
+        }
+    }
+
+    var appServerInputItems: [[String: Any]] {
+        var items: [[String: Any]] = [
+            ["type": "text", "text": prompt, "text_elements": []]
+        ]
+        items.append(contentsOf: attachments.compactMap(\.appServerInputItem))
+        return items
     }
 }
 
@@ -283,12 +329,15 @@ final class CodexRunner {
     private var activeTurnID: String?
     private var lastAssistantMessage = ""
     private var stderrBuffer = ""
-    private var pendingSteerPrompts: [String] = []
+    private var pendingSteers: [(prompt: String, attachments: [CodexTurnAttachment])] = []
+    private var pendingServerRequests: [Int: (method: String, params: Any?)] = [:]
     private var streamedAgentMessagePhases: [String: String] = [:]
     private var streamedAgentMessageBuffers: [String: String] = [:]
     private var commandOutputBuffers: [String: String] = [:]
+    private var fileChangeOutputBuffers: [String: String] = [:]
     private var reasoningSummaryBuffers: [String: String] = [:]
     private var planBuffers: [String: String] = [:]
+    private var pendingCompletionTask: Task<Void, Never>?
 
     init(executablePath: String, workingDirectory: String, initialThreadID: String? = nil) {
         self.executablePath = executablePath
@@ -306,6 +355,71 @@ final class CodexRunner {
 
     var isRunning: Bool {
         isRunningTurn
+    }
+
+    func resolveServerRequest(requestID: Int, decision: String) throws {
+        guard let pending = pendingServerRequests.removeValue(forKey: requestID) else {
+            throw CodexRunnerError.processFailed(status: -1, details: "Approval request \(requestID) is no longer pending.")
+        }
+
+        let result: [String: Any]
+        switch pending.method {
+        case "item/commandExecution/requestApproval":
+            guard ["accept", "acceptForSession", "decline", "cancel"].contains(decision) else {
+                throw CodexRunnerError.processFailed(status: -1, details: "Unsupported command approval decision \(decision).")
+            }
+            result = ["decision": decision]
+
+        case "item/fileChange/requestApproval":
+            guard ["accept", "acceptForSession", "decline", "cancel"].contains(decision) else {
+                throw CodexRunnerError.processFailed(status: -1, details: "Unsupported file-change approval decision \(decision).")
+            }
+            result = ["decision": decision]
+
+        case "item/permissions/requestApproval":
+            guard ["accept", "acceptForSession", "decline", "cancel"].contains(decision) else {
+                throw CodexRunnerError.processFailed(status: -1, details: "Unsupported permissions approval decision \(decision).")
+            }
+            let params = pending.params as? [String: Any] ?? [:]
+            let requestedPermissions = params["permissions"] as? [String: Any] ?? [:]
+            let grantedPermissions = decision == "accept" || decision == "acceptForSession" ? requestedPermissions : [:]
+            result = [
+                "permissions": grantedPermissions,
+                "scope": decision == "acceptForSession" ? "session" : "turn"
+            ]
+
+        default:
+            throw CodexRunnerError.processFailed(status: -1, details: "MiWhisper cannot resolve app-server request \(pending.method).")
+        }
+
+        Task { @MainActor [weak self] in
+            do {
+                try await self?.sendJSON(["id": requestID, "result": result])
+                self?.emitActivity(
+                    CodexActivityEntry(
+                        sourceID: "approval-resolved-\(requestID)",
+                        groupID: "approval-\(requestID)",
+                        kind: decision == "decline" || decision == "cancel" ? .warning : .system,
+                        blockKind: .system,
+                        title: "Approval \(decision == "accept" || decision == "acceptForSession" ? "Approved" : "Rejected")",
+                        detail: pending.method
+                    )
+                )
+                if decision == "cancel" {
+                    await self?.performInterrupt()
+                }
+            } catch {
+                self?.pendingServerRequests[requestID] = pending
+                self?.emitActivity(
+                    CodexActivityEntry(
+                        kind: .error,
+                        blockKind: .system,
+                        title: "Approval Response Failed",
+                        detail: error.localizedDescription
+                    )
+                )
+            }
+        }
     }
 
     func run(command: CodexTurnCommand) throws {
@@ -326,7 +440,7 @@ final class CodexRunner {
         lastAssistantMessage = ""
         stderrBuffer = ""
         isInterruptRequested = false
-        pendingSteerPrompts = []
+        pendingSteers = []
         isRunningTurn = true
 
         emitActivity(
@@ -350,7 +464,7 @@ final class CodexRunner {
         }
     }
 
-    func steer(prompt: String) throws {
+    func steer(prompt: String, attachments: [CodexTurnAttachment] = []) throws {
         let normalizedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedPrompt.isEmpty else {
             throw CodexRunnerError.emptyPrompt
@@ -364,7 +478,7 @@ final class CodexRunner {
             CodexActivityEntry(
                 kind: .user,
                 title: "Steer",
-                detail: normalizedPrompt
+                detail: userFacingPromptDetail(prompt: normalizedPrompt, attachments: attachments)
             )
         )
         emitActivity(
@@ -376,12 +490,12 @@ final class CodexRunner {
         )
 
         if activeTurnID == nil {
-            pendingSteerPrompts.append(normalizedPrompt)
+            pendingSteers.append((prompt: normalizedPrompt, attachments: attachments))
             return
         }
 
         Task { [weak self] in
-            await self?.performSteer(prompt: normalizedPrompt)
+            await self?.performSteer(prompt: normalizedPrompt, attachments: attachments)
         }
     }
 
@@ -428,7 +542,7 @@ final class CodexRunner {
         }
     }
 
-    private func performSteer(prompt: String) async {
+    private func performSteer(prompt: String, attachments: [CodexTurnAttachment] = []) async {
         guard let threadID = currentThreadID else {
             emitActivity(
                 CodexActivityEntry(
@@ -441,7 +555,7 @@ final class CodexRunner {
         }
 
         guard let expectedTurnID = activeTurnID else {
-            pendingSteerPrompts.append(prompt)
+            pendingSteers.append((prompt: prompt, attachments: attachments))
             return
         }
 
@@ -451,9 +565,7 @@ final class CodexRunner {
                 params: [
                     "threadId": threadID,
                     "expectedTurnId": expectedTurnID,
-                    "input": [
-                        ["type": "text", "text": prompt]
-                    ]
+                    "input": appServerInputItems(prompt: prompt, attachments: attachments)
                 ]
             )
 
@@ -515,7 +627,7 @@ final class CodexRunner {
             )
             applyThreadResponse(response)
 
-        case let .resume(sessionID, _, _, _, _):
+        case let .resume(sessionID, _, _, _, _, _, _):
             if threadLoaded, currentThreadID == sessionID {
                 return
             }
@@ -617,6 +729,7 @@ final class CodexRunner {
 
         for _ in 0..<30 {
             let socket = URLSession.shared.webSocketTask(with: url)
+            socket.maximumMessageSize = 64 * 1024 * 1024
             socket.resume()
             webSocket = socket
 
@@ -742,14 +855,127 @@ final class CodexRunner {
             return
         }
 
-        if let id = payload["id"] as? Int {
-            handleResponse(id: id, payload: payload)
+        if let method = payload["method"] as? String {
+            if let id = payload["id"] as? Int {
+                handleServerRequest(id: id, method: method, params: payload["params"])
+            } else {
+                handleNotification(method: method, params: payload["params"])
+            }
             return
         }
 
-        if let method = payload["method"] as? String {
-            handleNotification(method: method, params: payload["params"])
+        if let id = payload["id"] as? Int {
+            handleResponse(id: id, payload: payload)
         }
+    }
+
+    private func handleServerRequest(id: Int, method: String, params: Any?) {
+        if canResolveServerRequest(method) {
+            pendingServerRequests[id] = (method: method, params: params)
+            emitActivity(approvalRequestEntry(id: id, method: method, params: params))
+            return
+        }
+
+        let detail = userFacingServerRequestDetail(method: method, params: params)
+        emitActivity(
+            CodexActivityEntry(
+                kind: .warning,
+                blockKind: .system,
+                title: "Codex Needs Attention",
+                detail: detail
+            )
+        )
+
+        Task { @MainActor [weak self] in
+            do {
+                try await self?.sendJSON([
+                    "id": id,
+                    "error": [
+                        "code": -32601,
+                        "message": "MiWhisper does not yet support app-server request \(method)."
+                    ]
+                ])
+            } catch {
+                self?.emitActivity(
+                    CodexActivityEntry(
+                        kind: .error,
+                        blockKind: .system,
+                        title: "Codex Request Failed",
+                        detail: error.localizedDescription
+                    )
+                )
+            }
+        }
+    }
+
+    private func canResolveServerRequest(_ method: String) -> Bool {
+        method == "item/commandExecution/requestApproval" ||
+            method == "item/fileChange/requestApproval" ||
+            method == "item/permissions/requestApproval"
+    }
+
+    private func approvalRequestEntry(id: Int, method: String, params: Any?) -> CodexActivityEntry {
+        let params = params as? [String: Any] ?? [:]
+        let command = params["command"] as? String
+        let cwd = params["cwd"] as? String
+        let reason = params["reason"] as? String
+        let grantRoot = params["grantRoot"] as? String
+
+        let title: String
+        let detailParts: [String?]
+        let relatedFiles: [CodexActivityFile]
+
+        switch method {
+        case "item/commandExecution/requestApproval":
+            title = "Codex Approval Requested"
+            relatedFiles = files(fromCommandActions: params["commandActions"] as? [[String: Any]] ?? [])
+            detailParts = [
+                "Request ID: \(id)",
+                "Type: command",
+                reason.map { "Reason: \($0)" },
+                cwd.map { "CWD: \($0)" },
+                command.map { "Command:\n\($0)" }
+            ]
+
+        case "item/fileChange/requestApproval":
+            title = "Codex Approval Requested"
+            relatedFiles = grantRoot.map { [CodexActivityFile(path: $0, kindLabel: "write root")] } ?? []
+            detailParts = [
+                "Request ID: \(id)",
+                "Type: file-change",
+                reason.map { "Reason: \($0)" },
+                grantRoot.map { "Grant root: \($0)" }
+            ]
+
+        case "item/permissions/requestApproval":
+            title = "Codex Permission Requested"
+            let permissions = params["permissions"] as? [String: Any] ?? [:]
+            relatedFiles = files(fromPermissions: permissions)
+            detailParts = [
+                "Request ID: \(id)",
+                "Type: permissions",
+                reason.map { "Reason: \($0)" },
+                cwd.map { "CWD: \($0)" },
+                permissionsSummary(from: permissions).map { "Permissions:\n\($0)" }
+            ]
+
+        default:
+            title = "Codex Needs Attention"
+            relatedFiles = []
+            detailParts = ["Request ID: \(id)", method]
+        }
+
+        return CodexActivityEntry(
+            sourceID: "approval-request-\(id)",
+            groupID: "approval-\(id)",
+            kind: .warning,
+            blockKind: .system,
+            title: title,
+            detail: detailParts.compactMap { $0 }.joined(separator: "\n"),
+            detailStyle: .body,
+            command: command,
+            relatedFiles: relatedFiles
+        )
     }
 
     private func handleResponse(id: Int, payload: [String: Any]) {
@@ -814,9 +1040,39 @@ final class CodexRunner {
                 handlePlanDelta(params)
             }
 
-        case "item/commandExecution/outputDelta":
+        case "item/commandExecution/outputDelta", "command/exec/outputDelta":
             if let params = params as? [String: Any] {
                 handleCommandExecutionOutputDelta(params)
+            }
+
+        case "item/fileChange/outputDelta":
+            if let params = params as? [String: Any] {
+                handleFileChangeOutputDelta(params)
+            }
+
+        case "item/fileChange/patchUpdated":
+            if let params = params as? [String: Any] {
+                handleFileChangePatchUpdated(params)
+            }
+
+        case "turn/diff/updated":
+            if let params = params as? [String: Any] {
+                handleTurnDiffUpdated(params)
+            }
+
+        case "turn/plan/updated":
+            if let params = params as? [String: Any] {
+                handleTurnPlanUpdated(params)
+            }
+
+        case "thread/tokenUsage/updated":
+            if let params = params as? [String: Any] {
+                handleThreadTokenUsageUpdated(params)
+            }
+
+        case "warning", "guardianWarning", "configWarning", "deprecationNotice":
+            if let params = params as? [String: Any] {
+                handleWarningNotification(method: method, params)
             }
 
         case "error":
@@ -826,6 +1082,29 @@ final class CodexRunner {
 
         default:
             break
+        }
+    }
+
+    private func userFacingServerRequestDetail(method: String, params: Any?) -> String {
+        switch method {
+        case "item/commandExecution/requestApproval":
+            return "Codex requested command approval. If this appears without action buttons, reload the Companion PWA."
+        case "item/fileChange/requestApproval":
+            return "Codex requested file-change approval. If this appears without action buttons, reload the Companion PWA."
+        case "item/permissions/requestApproval":
+            return "Codex requested additional permissions. If this appears without action buttons, reload the Companion PWA."
+        case "item/tool/requestUserInput":
+            return "Codex requested structured user input. Continue from the Mac or steer the turn with the requested answer."
+        case "mcpServer/elicitation/request":
+            return "An MCP server requested input. MiWhisper does not yet render this request type."
+        default:
+            if let params,
+               let data = try? JSONSerialization.data(withJSONObject: params, options: []),
+               let text = String(data: data, encoding: .utf8),
+               !text.isEmpty {
+                return "\(method)\n\(CodexActivityEntry.clippedText(text, maxCharacters: 2_000))"
+            }
+            return method
         }
     }
 
@@ -895,21 +1174,8 @@ final class CodexRunner {
         switch status {
         case "completed":
             emitActivity(CodexActivityEntry(kind: .system, blockKind: .system, title: "Turn Completed", detail: nil))
-
-            guard !lastAssistantMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                emitTurnFailed(CodexRunnerError.emptyResponse.localizedDescription)
-                resetTurnState()
-                return
-            }
-
-            emitTurnCompleted(
-                CodexRunResult(
-                    prompt: currentPrompt,
-                    response: lastAssistantMessage.trimmingCharacters(in: .whitespacesAndNewlines),
-                    sessionID: currentThreadID,
-                    stderr: stderrBuffer
-                )
-            )
+            completeFinishedTurnWithGracePeriod()
+            return
 
         case "interrupted":
             let interruptionMessage = currentThreadID.map { "Interrupted • \($0)" } ?? "Interrupted"
@@ -925,16 +1191,71 @@ final class CodexRunner {
         resetTurnState()
     }
 
+    private func completeFinishedTurnWithGracePeriod() {
+        pendingCompletionTask?.cancel()
+
+        let finalize: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            let resolvedResponse = self.resolvedAssistantMessage()
+            guard !resolvedResponse.isEmpty else {
+                self.emitTurnFailed(CodexRunnerError.emptyResponse.localizedDescription)
+                self.resetTurnState()
+                return
+            }
+
+            self.emitTurnCompleted(
+                CodexRunResult(
+                    prompt: self.currentPrompt,
+                    response: resolvedResponse,
+                    sessionID: self.currentThreadID,
+                    stderr: self.stderrBuffer
+                )
+            )
+            self.resetTurnState()
+        }
+
+        if !resolvedAssistantMessage().isEmpty {
+            finalize()
+            return
+        }
+
+        pendingCompletionTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            self.pendingCompletionTask = nil
+            finalize()
+        }
+    }
+
     private func handleItemStarted(_ params: [String: Any]) {
         guard let item = params["item"] as? [String: Any] else { return }
+        let type = item["type"] as? String ?? "other"
+        if type == "reasoning" || type == "userMessage" { return }
+        if type == "agentMessage" {
+            if let itemID = item["id"] as? String {
+                streamedAgentMessagePhases[itemID] = item["phase"] as? String ?? "final_answer"
+            }
+            if agentMessageText(from: item).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
+            }
+        }
         emitActivity(startedEntry(for: item))
     }
 
     private func handleItemCompleted(_ params: [String: Any]) {
         guard let item = params["item"] as? [String: Any] else { return }
 
-        if let type = item["type"] as? String, type == "agentMessage", let text = item["text"] as? String, !text.isEmpty {
-            lastAssistantMessage = text
+        let type = item["type"] as? String ?? "other"
+        if type == "reasoning" || type == "userMessage" { return }
+
+        if type == "agentMessage" {
+            let itemID = item["id"] as? String
+            let text = agentMessageText(from: item)
+            let bufferedText = itemID.flatMap { streamedAgentMessageBuffers[$0] } ?? ""
+            let finalText = text.isEmpty ? bufferedText : text
+            if !finalText.isEmpty {
+                lastAssistantMessage = finalText
+            }
         }
 
         emitActivity(completedEntry(for: item))
@@ -966,7 +1287,18 @@ final class CodexRunner {
                 )
             )
         } else {
-            lastAssistantMessage += delta
+            lastAssistantMessage = updated
+            emitActivity(
+                CodexActivityEntry(
+                    sourceID: "agent-\(itemID)",
+                    groupID: "final-\(itemID)",
+                    kind: .assistant,
+                    blockKind: .final,
+                    title: "Codex",
+                    detail: updated,
+                    detailStyle: .body
+                )
+            )
         }
     }
 
@@ -1020,7 +1352,7 @@ final class CodexRunner {
 
     private func handleCommandExecutionOutputDelta(_ params: [String: Any]) {
         guard
-            let itemID = params["itemId"] as? String,
+            let itemID = params["itemId"] as? String ?? params["callId"] as? String,
             let delta = params["delta"] as? String
         else {
             return
@@ -1040,6 +1372,175 @@ final class CodexRunner {
                 detailStyle: .monospaced
             )
         )
+    }
+
+    private func handleFileChangeOutputDelta(_ params: [String: Any]) {
+        guard
+            let itemID = params["itemId"] as? String,
+            let delta = params["delta"] as? String
+        else {
+            return
+        }
+
+        let updated = CodexActivityEntry.clippedText((fileChangeOutputBuffers[itemID] ?? "") + delta, maxCharacters: 16_000)
+        fileChangeOutputBuffers[itemID] = updated
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "file-output-\(itemID)",
+                groupID: "patch-\(itemID)",
+                kind: .tool,
+                blockKind: .patch,
+                title: "File Change Output",
+                detail: updated,
+                detailStyle: .monospaced
+            )
+        )
+    }
+
+    private func handleFileChangePatchUpdated(_ params: [String: Any]) {
+        guard let itemID = params["itemId"] as? String else { return }
+        let changes = params["changes"] as? [[String: Any]] ?? []
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "file-change-\(itemID)",
+                groupID: "patch-\(itemID)",
+                kind: .tool,
+                blockKind: .patch,
+                title: "File Change Updated",
+                detail: summarizeFileChanges(changes),
+                detailStyle: .monospaced,
+                relatedFiles: files(fromFileChanges: changes)
+            )
+        )
+    }
+
+    private func handleTurnDiffUpdated(_ params: [String: Any]) {
+        let turnID = params["turnId"] as? String ?? activeTurnID ?? UUID().uuidString
+        guard let diff = (params["diff"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !diff.isEmpty else {
+            return
+        }
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "turn-diff-\(turnID)",
+                groupID: "patch-\(turnID)",
+                kind: .tool,
+                blockKind: .patch,
+                title: "Live Diff",
+                detail: CodexActivityEntry.clippedText(diff, maxCharacters: 12_000),
+                detailStyle: .monospaced
+            )
+        )
+    }
+
+    private func handleTurnPlanUpdated(_ params: [String: Any]) {
+        let turnID = params["turnId"] as? String ?? activeTurnID ?? UUID().uuidString
+        let explanation = (params["explanation"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let steps = params["plan"] as? [[String: Any]] ?? []
+        let stepLines = steps.compactMap { step -> String? in
+            guard let text = (step["step"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                return nil
+            }
+            let status = (step["status"] as? String ?? "pending").trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefix = planPrefix(for: status)
+            return "\(prefix) \(text)"
+        }
+        let detail = ([explanation].compactMap { $0 } + stepLines).joined(separator: "\n")
+        guard !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "turn-plan-\(turnID)",
+                groupID: "plan-\(turnID)",
+                kind: .assistant,
+                blockKind: .reasoning,
+                title: "Live Plan",
+                detail: detail,
+                detailStyle: .body
+            )
+        )
+    }
+
+    private func handleThreadTokenUsageUpdated(_ params: [String: Any]) {
+        guard let tokenUsage = params["tokenUsage"] as? [String: Any] else { return }
+        let turnID = params["turnId"] as? String ?? activeTurnID ?? UUID().uuidString
+        let total = tokenUsage["total"] as? [String: Any]
+        let last = tokenUsage["last"] as? [String: Any]
+        let contextWindow = tokenUsage["modelContextWindow"] as? Int
+        let totalTokens = total?["totalTokens"] as? Int
+        let lastTokens = last?["totalTokens"] as? Int
+        let reasoningTokens = last?["reasoningOutputTokens"] as? Int
+
+        let lines = [
+            totalTokens.map { "Total tokens: \($0)" },
+            lastTokens.map { "Last turn: \($0)" },
+            reasoningTokens.map { "Reasoning output: \($0)" },
+            contextWindow.map { "Context window: \($0)" }
+        ].compactMap { $0 }
+
+        guard !lines.isEmpty else { return }
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "token-usage-\(turnID)",
+                groupID: "token-usage-\(turnID)",
+                kind: .system,
+                blockKind: .system,
+                title: "Context Usage",
+                detail: lines.joined(separator: "\n"),
+                detailStyle: .body
+            )
+        )
+    }
+
+    private func handleWarningNotification(method: String, _ params: [String: Any]) {
+        let message = params["message"] as? String
+            ?? params["summary"] as? String
+            ?? params["notice"] as? String
+            ?? method
+        let details = params["details"] as? String
+        let path = params["path"] as? String
+        let body = [message, details, path.map { "Path: \($0)" }]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+
+        emitActivity(
+            CodexActivityEntry(
+                sourceID: "warning-\(method)-\(body.hashValue)",
+                groupID: "warning-\(method)",
+                kind: .warning,
+                blockKind: .system,
+                title: warningTitle(for: method),
+                detail: body.isEmpty ? method : body
+            )
+        )
+    }
+
+    private func planPrefix(for status: String) -> String {
+        switch status.lowercased() {
+        case "completed", "complete", "done":
+            return "- [x]"
+        case "in_progress", "in-progress", "running":
+            return "- [ ] In progress:"
+        default:
+            return "- [ ]"
+        }
+    }
+
+    private func warningTitle(for method: String) -> String {
+        switch method {
+        case "guardianWarning":
+            return "Codex Guardian Warning"
+        case "configWarning":
+            return "Codex Config Warning"
+        case "deprecationNotice":
+            return "Codex Deprecation Notice"
+        default:
+            return "Codex Warning"
+        }
     }
 
     private func handleErrorNotification(_ params: [String: Any]) {
@@ -1178,25 +1679,47 @@ final class CodexRunner {
     }
 
     private func flushPendingSteersIfNeeded() async {
-        guard !pendingSteerPrompts.isEmpty else { return }
+        guard !pendingSteers.isEmpty else { return }
 
-        let prompts = pendingSteerPrompts
-        pendingSteerPrompts.removeAll()
+        let steers = pendingSteers
+        pendingSteers.removeAll()
 
-        for prompt in prompts {
-            await performSteer(prompt: prompt)
+        for steer in steers {
+            await performSteer(prompt: steer.prompt, attachments: steer.attachments)
         }
     }
 
+    private func resolvedAssistantMessage() -> String {
+        let direct = lastAssistantMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !direct.isEmpty {
+            return direct
+        }
+
+        let buffered = streamedAgentMessageBuffers
+            .compactMap { key, value -> String? in
+                let phase = streamedAgentMessagePhases[key] ?? "final_answer"
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard phase != "commentary", !trimmed.isEmpty else { return nil }
+                return trimmed
+            }
+            .max(by: { $0.count < $1.count }) ?? ""
+
+        return buffered
+    }
+
     private func resetTurnState() {
+        pendingCompletionTask?.cancel()
+        pendingCompletionTask = nil
         currentPrompt = ""
         activeTurnID = nil
         lastAssistantMessage = ""
         isInterruptRequested = false
-        pendingSteerPrompts = []
+        pendingSteers = []
+        pendingServerRequests = [:]
         streamedAgentMessagePhases = [:]
         streamedAgentMessageBuffers = [:]
         commandOutputBuffers = [:]
+        fileChangeOutputBuffers = [:]
         reasoningSummaryBuffers = [:]
         planBuffers = [:]
     }
@@ -1205,20 +1728,22 @@ final class CodexRunner {
         let model = command.modelOverride ?? "config default"
         let reasoning = command.reasoningEffort.title
         let speed = command.serviceTier.title
+        let access = command.accessMode.title
 
         switch command {
         case .start:
-            return "new session via app-server · model \(model) · think \(reasoning) · speed \(speed) · full access"
-        case let .resume(sessionID, _, _, _, _):
-            return "resume \(sessionID) via app-server · model \(model) · think \(reasoning) · speed \(speed) · full access"
+            return "new session via app-server · model \(model) · think \(reasoning) · speed \(speed) · access \(access)"
+        case let .resume(sessionID, _, _, _, _, _, _):
+            return "resume \(sessionID) via app-server · model \(model) · think \(reasoning) · speed \(speed) · access \(access)"
         }
     }
 
     private func threadStartParams(for command: CodexTurnCommand) -> [String: Any] {
         var params: [String: Any] = [
             "cwd": workingDirectory,
-            "approvalPolicy": "never",
-            "sandbox": "danger-full-access",
+            "approvalPolicy": command.accessMode.approvalPolicy,
+            "approvalsReviewer": "user",
+            "sandbox": command.accessMode.sandboxMode,
             "personality": "pragmatic"
         ]
 
@@ -1237,8 +1762,9 @@ final class CodexRunner {
         var params: [String: Any] = [
             "threadId": threadID,
             "cwd": workingDirectory,
-            "approvalPolicy": "never",
-            "sandbox": "danger-full-access",
+            "approvalPolicy": command.accessMode.approvalPolicy,
+            "approvalsReviewer": "user",
+            "sandbox": command.accessMode.sandboxMode,
             "personality": "pragmatic"
         ]
 
@@ -1256,11 +1782,10 @@ final class CodexRunner {
     private func turnStartParams(for command: CodexTurnCommand) -> [String: Any] {
         var params: [String: Any] = [
             "threadId": currentThreadID ?? command.sessionID ?? "",
-            "input": [
-                ["type": "text", "text": command.prompt]
-            ],
-            "approvalPolicy": "never",
-            "sandboxPolicy": ["type": "dangerFullAccess"],
+            "input": command.appServerInputItems,
+            "approvalPolicy": command.accessMode.approvalPolicy,
+            "approvalsReviewer": "user",
+            "sandboxPolicy": turnSandboxPolicy(for: command.accessMode),
             "personality": "pragmatic"
         ]
 
@@ -1277,6 +1802,37 @@ final class CodexRunner {
         }
 
         return params
+    }
+
+    private func turnSandboxPolicy(for accessMode: CodexAccessMode) -> [String: Any] {
+        switch accessMode {
+        case .fullAccess:
+            return ["type": "dangerFullAccess"]
+        case .onRequest:
+            return [
+                "type": "workspaceWrite",
+                "writableRoots": [workingDirectory],
+                "networkAccess": true,
+                "excludeTmpdirEnvVar": false,
+                "excludeSlashTmp": false
+            ]
+        }
+    }
+
+    private func appServerInputItems(prompt: String, attachments: [CodexTurnAttachment]) -> [[String: Any]] {
+        var items: [[String: Any]] = [
+            ["type": "text", "text": prompt, "text_elements": []]
+        ]
+        items.append(contentsOf: attachments.compactMap(\.appServerInputItem))
+        return items
+    }
+
+    private func userFacingPromptDetail(prompt: String, attachments: [CodexTurnAttachment]) -> String {
+        guard !attachments.isEmpty else { return prompt }
+        let names = attachments
+            .map { $0.name ?? $0.path?.components(separatedBy: "/").last ?? $0.url ?? "imagen" }
+            .joined(separator: ", ")
+        return "\(prompt)\n\nAdjuntos: \(names)"
     }
 
     private func startedEntry(for item: [String: Any]) -> CodexActivityEntry {
@@ -1316,6 +1872,7 @@ final class CodexRunner {
             if let itemID {
                 streamedAgentMessagePhases[itemID] = phase
             }
+            let text = agentMessageText(from: item)
             return CodexActivityEntry(
                 sourceID: itemID.map { "agent-\($0)" },
                 groupID: itemID.map {
@@ -1324,7 +1881,7 @@ final class CodexRunner {
                 kind: .assistant,
                 blockKind: phase == "commentary" ? .reasoning : .final,
                 title: phase == "commentary" ? "Codex Thinking" : "Codex",
-                detail: item["text"] as? String,
+                detail: text.isEmpty ? nil : text,
                 detailStyle: .body
             )
 
@@ -1336,6 +1893,17 @@ final class CodexRunner {
                 blockKind: .reasoning,
                 title: "Reasoning",
                 detail: nil
+            )
+
+        case "contextCompaction", "contextcompaction", "context_compaction":
+            return CodexActivityEntry(
+                sourceID: itemID.map { "context-compaction-\($0)" },
+                groupID: itemID.map { "context-compaction-\($0)" },
+                kind: .system,
+                blockKind: .system,
+                title: "Contexto",
+                detail: "Compactando contexto…",
+                detailStyle: .body
             )
 
         default:
@@ -1357,6 +1925,9 @@ final class CodexRunner {
         switch type {
         case "agentMessage":
             let phase = item["phase"] as? String ?? "final_answer"
+            let bufferedText = itemID.flatMap { streamedAgentMessageBuffers[$0] } ?? ""
+            let text = agentMessageText(from: item)
+            let detail = text.isEmpty ? bufferedText : text
             return CodexActivityEntry(
                 sourceID: itemID.map {
                     phase == "commentary" ? "agent-commentary-\($0)" : "agent-\($0)"
@@ -1367,7 +1938,7 @@ final class CodexRunner {
                 kind: .assistant,
                 blockKind: phase == "commentary" ? .reasoning : .final,
                 title: phase == "commentary" ? "Codex Thinking" : "Codex",
-                detail: item["text"] as? String,
+                detail: detail.isEmpty ? nil : detail,
                 detailStyle: .body
             )
 
@@ -1423,6 +1994,17 @@ final class CodexRunner {
                 relatedFiles: files(fromFileChanges: changes)
             )
 
+        case "contextCompaction", "contextcompaction", "context_compaction":
+            return CodexActivityEntry(
+                sourceID: itemID.map { "context-compaction-\($0)" },
+                groupID: itemID.map { "context-compaction-\($0)" },
+                kind: .system,
+                blockKind: .system,
+                title: "Contexto",
+                detail: "Contexto compactado",
+                detailStyle: .body
+            )
+
         default:
             return CodexActivityEntry(
                 sourceID: itemID.map { "item-\($0)" },
@@ -1433,6 +2015,27 @@ final class CodexRunner {
                 detail: type
             )
         }
+    }
+
+    private func agentMessageText(from item: [String: Any]) -> String {
+        if let text = item["text"] as? String {
+            return text
+        }
+
+        if let content = item["content"] as? [[String: Any]] {
+            return content.compactMap { part in
+                part["text"] as? String
+                    ?? part["content"] as? String
+                    ?? part["markdown"] as? String
+            }
+            .joined()
+        }
+
+        if let message = item["message"] as? [String: Any] {
+            return agentMessageText(from: message)
+        }
+
+        return ""
     }
 
     private func files(fromCommandActions actions: [[String: Any]]) -> [CodexActivityFile] {
@@ -1462,6 +2065,85 @@ final class CodexRunner {
             let diff = (change["diff"] as? String)
                 .map { CodexActivityEntry.clippedText($0, maxCharacters: 8_000) }
             return CodexActivityFile(path: path, kindLabel: kindLabel, diff: diff)
+        }
+    }
+
+    private func files(fromPermissions permissions: [String: Any]) -> [CodexActivityFile] {
+        guard let fileSystem = permissions["fileSystem"] as? [String: Any] else { return [] }
+        var files: [CodexActivityFile] = []
+
+        for key in ["read", "write"] {
+            guard let paths = fileSystem[key] as? [String] else { continue }
+            files.append(contentsOf: paths.map { CodexActivityFile(path: $0, kindLabel: key) })
+        }
+
+        if let entries = fileSystem["entries"] as? [[String: Any]] {
+            for entry in entries {
+                let access = entry["access"] as? String
+                guard let path = permissionPathLabel(entry["path"] as? [String: Any]) else { continue }
+                files.append(CodexActivityFile(path: path, kindLabel: access))
+            }
+        }
+
+        return files
+    }
+
+    private func permissionsSummary(from permissions: [String: Any]) -> String? {
+        var lines: [String] = []
+
+        if let fileSystem = permissions["fileSystem"] as? [String: Any] {
+            if let reads = fileSystem["read"] as? [String], !reads.isEmpty {
+                lines.append("Read: \(reads.joined(separator: ", "))")
+            }
+            if let writes = fileSystem["write"] as? [String], !writes.isEmpty {
+                lines.append("Write: \(writes.joined(separator: ", "))")
+            }
+            if let entries = fileSystem["entries"] as? [[String: Any]], !entries.isEmpty {
+                let labels = entries.compactMap { entry -> String? in
+                    guard let path = permissionPathLabel(entry["path"] as? [String: Any]) else { return nil }
+                    let access = entry["access"] as? String ?? "access"
+                    return "\(access): \(path)"
+                }
+                if !labels.isEmpty {
+                    lines.append("Filesystem: \(labels.joined(separator: "; "))")
+                }
+            }
+        }
+
+        if let network = permissions["network"] as? [String: Any],
+           let enabled = network["enabled"] as? Bool {
+            lines.append("Network: \(enabled ? "enabled" : "disabled")")
+        }
+
+        if lines.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: permissions, options: [.prettyPrinted]),
+           let text = String(data: data, encoding: .utf8),
+           !text.isEmpty {
+            lines.append(CodexActivityEntry.clippedText(text, maxCharacters: 2_000))
+        }
+
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func permissionPathLabel(_ payload: [String: Any]?) -> String? {
+        guard let payload, let type = payload["type"] as? String else { return nil }
+
+        switch type {
+        case "path":
+            return payload["path"] as? String
+        case "glob_pattern":
+            return payload["pattern"] as? String
+        case "special":
+            guard let value = payload["value"] as? [String: Any] else { return nil }
+            if let kind = value["kind"] as? String {
+                if let path = value["path"] as? String {
+                    return "\(kind): \(path)"
+                }
+                return kind
+            }
+            return nil
+        default:
+            return nil
         }
     }
 
